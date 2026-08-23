@@ -32,10 +32,6 @@ func registerWaitTools(server *mcp.Server) {
 		Name:        "wait_for",
 		Description: "Wait for a page condition: text present, text absent, selector present, or URL match. Polls the page until the condition is met or timeout (default 10s). Responds to context cancellation.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			result, err := automatorWaitFor(ctx, input)
-			return nil, result, err
-		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err

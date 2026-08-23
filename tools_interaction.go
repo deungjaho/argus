@@ -10,17 +10,6 @@ import (
 
 // --- input types ---
 
-// errUnsupportedWeChat returns a structured ErrUnsupported error for tools
-// that are CDP-specific and have no WeChat equivalent. Used by type, scroll,
-// hover, drag, key, select_option, fill_form.
-func errUnsupportedWeChat(op string) (*mcp.CallToolResult, any, error) {
-	return nil, nil, &ToolError{
-		Code:    ErrUnsupported,
-		Op:      op,
-		Message: op + " is not supported under the wechat backend (no CDP mouse/keyboard emulation in Mini Program)",
-	}
-}
-
 type clickInput struct {
 	Ref            string   `json:"ref,omitempty"`
 	Selector       string   `json:"selector,omitempty"`
@@ -116,27 +105,6 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		if activeBackend() == BackendWeChat {
-			selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-			if selector == "" {
-				err := &ToolError{
-					Code:    ErrInvalidInput,
-					Op:      "click",
-					Message: "click under wechat requires ref or selector (no coordinate tap)",
-				}
-				rec.SetError(err)
-				return nil, nil, err
-			}
-			result, err := automatorClickByRef(selector, input.NoWait)
-			if err != nil {
-				rec.SetError(formatWxError("click", err))
-				return nil, nil, err
-			}
-			result["action_id"] = string(rec.ID)
-			rec.SetResult(result)
-			return nil, result, nil
-		}
-
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -177,11 +145,6 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("type")
 		defer rec.End()
 		rec.SetParams(input)
-
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "type", Message: "type is not supported under wechat (use fill instead)"})
-			return errUnsupportedWeChat("type")
-		}
 
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -225,27 +188,6 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		if activeBackend() == BackendWeChat {
-			selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-			if selector == "" {
-				err := &ToolError{
-					Code:    ErrInvalidInput,
-					Op:      "fill",
-					Message: "fill under wechat requires ref or selector",
-				}
-				rec.SetError(err)
-				return nil, nil, err
-			}
-			result, err := automatorFillByRef(selector, input.Value)
-			if err != nil {
-				rec.SetError(formatWxError("fill", err))
-				return nil, nil, err
-			}
-			result["action_id"] = string(rec.ID)
-			rec.SetResult(result)
-			return nil, result, nil
-		}
-
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -281,11 +223,6 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("fill_form")
 		defer rec.End()
 		rec.SetParams(input)
-
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "fill_form", Message: "fill_form is not supported under wechat (use fill per field instead)"})
-			return errUnsupportedWeChat("fill_form")
-		}
 
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -327,11 +264,6 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "select_option", Message: "select_option is not supported under wechat (no <select> in Mini Program)"})
-			return errUnsupportedWeChat("select_option")
-		}
-
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -369,11 +301,6 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "key", Message: "key is not supported under wechat (no CDP keyboard emulation in Mini Program)"})
-			return errUnsupportedWeChat("key")
-		}
-
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -400,11 +327,6 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("scroll")
 		defer rec.End()
 		rec.SetParams(input)
-
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "scroll", Message: "scroll is not supported under wechat (use scroll-view component or swipe via eval)"})
-			return errUnsupportedWeChat("scroll")
-		}
 
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -438,11 +360,6 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("hover")
 		defer rec.End()
 		rec.SetParams(input)
-
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "hover", Message: "hover is not supported under wechat (no hover state in Mini Program)"})
-			return errUnsupportedWeChat("hover")
-		}
 
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -483,11 +400,6 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("drag")
 		defer rec.End()
 		rec.SetParams(input)
-
-		if activeBackend() == BackendWeChat {
-			rec.SetError(&ToolError{Code: ErrUnsupported, Op: "drag", Message: "drag is not supported under wechat (no CDP drag emulation in Mini Program)"})
-			return errUnsupportedWeChat("drag")
-		}
 
 		ws, err := requireTargetWS()
 		if err != nil {

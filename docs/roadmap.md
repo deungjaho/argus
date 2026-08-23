@@ -422,7 +422,6 @@ concretize this section are persisted in:
 
 - [docs/perception-and-action-design.md](perception-and-action-design.md) —
   `PerceptionNode` contract, action transition contract, recommended
-  internal-fusion architecture, Chrome/WeChat adapter differences, and
   unresolved owner decisions.
 - [docs/perception-benchmark.md](perception-benchmark.md) — cross-backend
   static and dynamic benchmark tasks, three-run rule, and the exact gate
@@ -553,7 +552,6 @@ expand each phase's items without changing the order or gates.
 
 ### P0 — Establish an evidence-based baseline
 
-- Build the same benchmark pages for Chrome and WeChat: normal form,
   dense table/list, duplicate labels, off-screen target, custom
   component, canvas or image text, layout/style defect, async update,
   navigation and reconnect.
@@ -566,7 +564,6 @@ expand each phase's items without changing the order or gates.
 Acceptance:
 
 - Ground truth and expected final state are explicit for every case.
-- Chrome and WeChat results use the same report schema.
 - Three consecutive runs are required; retries and escape hatches are
   reported.
 
@@ -576,7 +573,6 @@ Acceptance:
   generation, role/tag, text/value/state, viewport box,
   visibility/occlusion, provenance and confidence.
 - Keep Chrome DOM/a11y as the primary semantic source.
-- Add bounded viewport box and visibility information to WeChat snapshot
   nodes.
 - Custom components and canvas must report partial/unknown evidence
   honestly.
@@ -584,7 +580,6 @@ Acceptance:
 
 Acceptance:
 
-- Chrome and WeChat can locate and distinguish component, text, state
   and position through the default semantic path.
 - Coordinate conversion is verified on Retina/resized screenshots.
 - Duplicate elements never silently select the first match.
@@ -604,7 +599,6 @@ Acceptance:
 
 Acceptance:
 
-- Complex Chrome and WeChat flows pass three consecutive runs with zero
   wrong element actions and zero unreported retries.
 - Every reported success includes a verifiable final-state assertion.
 - Failure returns the failed postcondition, last observation and an
@@ -653,7 +647,6 @@ and latency.
 
 1. Runtime 8 independent PASS and merge checkpoint.
 2. Baseline benchmark and unified report schema.
-3. WeChat geometry parity plus ref-generation correctness.
 4. Dynamic before/after postcondition verification.
 5. Bounded on-demand style/layout inspection.
 6. OCR fallback only when benchmark evidence justifies it.

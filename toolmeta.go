@@ -56,7 +56,7 @@ var toolMetaRegistry = []ToolMeta{
 
 	// --- Navigate ---
 	// navigate is in the default loop.
-	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates"}, Sensitivity: "low", Idempotent: true, Description: "Navigate the current tab to a URL (supports typed mode for WeChat)."},
+	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates"}, Sensitivity: "low", Idempotent: true, Description: "Navigate the current tab to a URL."},
 	{Name: "go", Capability: CapCore, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Go back or forward in browser history."},
 	{Name: "navigate_back", Capability: CapFull, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use go with direction=back. Hidden from default toolsets."},
 	{Name: "navigate_forward", Capability: CapFull, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use go with direction=forward. Hidden from default toolsets."},
@@ -99,20 +99,6 @@ var toolMetaRegistry = []ToolMeta{
 	// --- Discovery ---
 	// tool_summary is in the default loop.
 	{Name: "tool_summary", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return a compact list of all tools and their capabilities."},
-
-	// --- WeChat automator (Mini Program backend) ---
-	// page_data is a backend-specific tool with no shared-semantic
-	// equivalent. It is CapCore (opt-in via --toolsets=core) to keep the
-	// default surface compact and shared-semantic. Under CDP it returns
-	// ErrUnsupported.
-	{Name: "page_data", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Read the current Mini Program page's reactive data (WeChat backend only)."},
-	// call_wx_method, mock_wx_method, and wxml are escape hatches, not core.
-	// They are CapFull (opt-in only via --toolsets=full) to keep the default
-	// surface small. Agents who need them can enable full or use the
-	// companion CLI / skill layer.
-	{Name: "call_wx_method", Capability: CapFull, SideEffects: []string{"calls_wx_api"}, Sensitivity: "medium", Idempotent: false, Description: "Invoke a wx.* API in the Mini Program runtime (WeChat backend only, escape hatch, opt-in)."},
-	{Name: "mock_wx_method", Capability: CapFull, SideEffects: []string{"mocks_wx_api"}, Sensitivity: "medium", Idempotent: false, Description: "Mock a wx.* API to return a fixed value (WeChat backend only, escape hatch, opt-in)."},
-	{Name: "wxml", Capability: CapFull, Sensitivity: "low", Idempotent: true, Description: "Dump the WXML structure of a page or element (WeChat backend only, on-demand inspection, opt-in)."},
 }
 
 // findToolMeta returns the metadata for a tool by name.

@@ -64,9 +64,6 @@ func TestToolEnabledDefaultOnly(t *testing.T) {
 	if !toolEnabled("snapshot") {
 		t.Error("snapshot should be enabled in default toolset")
 	}
-	if toolEnabled("page_data") {
-		t.Error("page_data should NOT be enabled in default toolset (moved to CapCore)")
-	}
 	if toolEnabled("network_requests") {
 		t.Error("network_requests should NOT be enabled in default-only toolset")
 	}

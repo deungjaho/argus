@@ -1,28 +1,23 @@
 package main
 
-// eval_harness_test.go — Runtime 8.0 evaluation harness.
+// eval_harness_test.go — evaluation harness.
 //
 // This is the smallest executable harness for measuring the agent semantic
-// loop across Chrome (CDP) and WeChat (Automator) backends. It records:
+// loop across Chrome (CDP). It records:
 //   - task success
 //   - tool calls
 //   - first-action success
 //   - retries
 //   - Argus schema/output bytes and estimated tokens
 //   - wall-clock latency
-//   - fallback to eval/backend escape hatches
+//   - fallback to eval escape hatches
 //   - error recovery outcome
 //
 // The harness does NOT fabricate results. When a backend is not available,
 // the corresponding tasks are skipped and the report notes the sample size.
 //
 // Run:
-//   # Chrome-only (no live WeChat needed):
 //   go test -tags=integration -count=1 -timeout 180s -run TestRuntime8Eval -v ./...
-//
-//   # Chrome + WeChat (requires live WeChat DevTools):
-//   ARGUS_WX_LIVE=1 ARGUS_WX_PORT=9420 \
-//   go test -tags=integration -count=1 -timeout 300s -run TestRuntime8Eval -v ./...
 
 import (
 	"context"
@@ -93,9 +88,6 @@ func (h *evalHarness) call(name string, args map[string]any) (map[string]any, er
 	if name == "eval" {
 		h.usedEval = true
 	}
-	if name == "call_wx_method" || name == "mock_wx_method" || name == "wxml" {
-		h.usedEscape = true
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	res, err := h.cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
@@ -113,9 +105,8 @@ func (h *evalHarness) call(name string, args map[string]any) (map[string]any, er
 			break
 		}
 	}
-	// Propagate MCP result errors. Without this, tasks like
-	// wechat_navigate_stale_ref score false negatives because the
-	// expected stale_reference error is silently swallowed.
+	// Propagate MCP result errors. Without this, tasks score false
+	// negatives because the expected error is silently swallowed.
 	if res.IsError {
 		var parsed map[string]any
 		if rawText != "" {
@@ -207,152 +198,6 @@ func taskChromeSnapshotClick(h *evalHarness) evalTaskResult {
 	return r
 }
 
-// taskWeChatSnapshotClick performs: configure -> status -> snapshot -> click.
-func taskWeChatSnapshotClick(h *evalHarness) evalTaskResult {
-	start := time.Now()
-	r := evalTaskResult{Name: "wechat_snapshot_click", Backend: "wechat"}
-
-	// Step 1: status
-	status, err := h.call("status", map[string]any{})
-	if err != nil {
-		r.ErrorRecovery = fmt.Sprintf("status failed: %v", err)
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	r.OutputBytes += resultBytes(status)
-
-	// Step 2: snapshot
-	snap, err := h.call("snapshot", map[string]any{})
-	if err != nil {
-		r.ErrorRecovery = fmt.Sprintf("snapshot failed: %v", err)
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	r.OutputBytes += resultBytes(snap)
-	r.FirstActionOK = true
-
-	// Step 3: click first element (if any)
-	elements, _ := snap["elements"].([]any)
-	if len(elements) > 0 {
-		if elem, ok := elements[0].(map[string]any); ok {
-			if ref, ok := elem["ref"].(string); ok && strings.HasPrefix(ref, "wx:") {
-				clickRes, err := h.call("click", map[string]any{"ref": ref})
-				if err != nil {
-					r.Retries++
-					r.ErrorRecovery = fmt.Sprintf("click failed: %v", err)
-				} else {
-					r.OutputBytes += resultBytes(clickRes)
-					r.Success = true
-				}
-			}
-		}
-	} else {
-		r.Success = true // snapshot alone is partial success
-	}
-
-	r.ToolCalls = h.toolCalls
-	r.UsedEval = h.usedEval
-	r.UsedEscapeHatch = h.usedEscape
-	r.EstTokens = r.OutputBytes / 4
-	r.LatencyMs = time.Since(start).Milliseconds()
-	return r
-}
-
-// taskWeChatNavigateStaleRef performs: snapshot -> navigate -> click old ref
-// (expect stale_reference) -> snapshot -> click new ref.
-func taskWeChatNavigateStaleRef(h *evalHarness) evalTaskResult {
-	start := time.Now()
-	r := evalTaskResult{Name: "wechat_navigate_stale_ref", Backend: "wechat"}
-
-	// Step 1: snapshot
-	snap, err := h.call("snapshot", map[string]any{})
-	if err != nil {
-		r.ErrorRecovery = fmt.Sprintf("snapshot failed: %v", err)
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	r.OutputBytes += resultBytes(snap)
-	r.FirstActionOK = true
-
-	elements, _ := snap["elements"].([]any)
-	if len(elements) == 0 {
-		r.Skipped = "no elements on page"
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	first, _ := elements[0].(map[string]any)
-	oldRef, _ := first["ref"].(string)
-
-	// Step 2: navigate (reLaunch to same page)
-	status, _ := h.call("status", map[string]any{})
-	r.OutputBytes += resultBytes(status)
-	page, _ := status["page"].(map[string]any)
-	path, _ := page["path"].(string)
-	if path == "" {
-		r.Skipped = "no current page path"
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	navURL := path
-	if !strings.HasPrefix(navURL, "/") {
-		navURL = "/" + navURL
-	}
-	navRes, err := h.call("navigate", map[string]any{"url": navURL, "mode": "reLaunch"})
-	if err != nil {
-		r.ErrorRecovery = fmt.Sprintf("navigate failed: %v", err)
-		r.LatencyMs = time.Since(start).Milliseconds()
-		r.ToolCalls = h.toolCalls
-		return r
-	}
-	r.OutputBytes += resultBytes(navRes)
-
-	// Step 3: click old ref — expect stale_reference
-	staleDetected := false
-	_, staleErr := h.call("click", map[string]any{"ref": oldRef})
-	if staleErr != nil && strings.Contains(staleErr.Error(), "stale") {
-		// Correct! Stale ref was detected. This is an intermediate success,
-		// not the full task success — the task requires recovery + new ref click.
-		staleDetected = true
-	} else if staleErr != nil {
-		r.ErrorRecovery = fmt.Sprintf("expected stale_reference, got: %v", staleErr)
-	} else {
-		r.ErrorRecovery = "expected stale_reference error, click succeeded unexpectedly"
-	}
-
-	// Step 4: re-snapshot and click new ref — full success requires both
-	// stale detection AND recovery via new ref click.
-	snap2, err := h.call("snapshot", map[string]any{})
-	if err == nil {
-		r.OutputBytes += resultBytes(snap2)
-		elements2, _ := snap2["elements"].([]any)
-		if len(elements2) > 0 {
-			if elem2, ok := elements2[0].(map[string]any); ok {
-				if newRef, ok := elem2["ref"].(string); ok && strings.HasPrefix(newRef, "wx:") {
-					_, err := h.call("click", map[string]any{"ref": newRef})
-					if err == nil && staleDetected {
-						r.Success = true // full success: stale detected + recovered + new ref clicked
-					}
-				}
-			}
-		}
-	}
-	if !r.Success && staleDetected {
-		r.ErrorRecovery = "stale ref detected but recovery (re-snapshot + new ref click) failed"
-	}
-
-	r.ToolCalls = h.toolCalls
-	r.UsedEval = h.usedEval
-	r.UsedEscapeHatch = h.usedEscape
-	r.EstTokens = r.OutputBytes / 4
-	r.LatencyMs = time.Since(start).Milliseconds()
-	return r
-}
-
 // --- Report ---
 
 func summarize(tasks []evalTaskResult) evalSummary {
@@ -419,54 +264,8 @@ func TestRuntime8Eval(t *testing.T) {
 		t.Fatalf("chrome client connect: %v", err)
 	}
 
-	// Ensure Chrome backend is active for Chrome tasks.
-	backendMu.Lock()
-	configuredBackend = BackendCDP
-	backendMu.Unlock()
-
-	chromeH := newEvalHarness(t, chromeCS, BackendCDP)
+	chromeH := newEvalHarness(t, chromeCS, "chrome")
 	tasks = append(tasks, taskChromeSnapshotClick(chromeH))
-
-	// --- WeChat tasks ---
-	wxLive := envStrDefault("", "ARGUS_WX_LIVE") == "1"
-	if !wxLive {
-		tasks = append(tasks, evalTaskResult{
-			Name: "wechat_snapshot_click", Backend: "wechat",
-			Skipped: "ARGUS_WX_LIVE not set",
-		})
-		tasks = append(tasks, evalTaskResult{
-			Name: "wechat_navigate_stale_ref", Backend: "wechat",
-			Skipped: "ARGUS_WX_LIVE not set",
-		})
-	} else {
-		// Configure WeChat backend.
-		port := envIntDefault(9420, "ARGUS_WX_PORT")
-		project := envStrDefault("", "ARGUS_WX_PROJECT")
-		backendMu.Lock()
-		configuredBackend = BackendWeChat
-		configuredWxPort = port
-		configuredWxProject = project
-		backendMu.Unlock()
-		closeAutomatorConn()
-
-		wxServer := mcp.NewServer(&mcp.Implementation{Name: "argus-eval-wx", Version: "test"}, nil)
-		registerAllTools(wxServer)
-		wct, wst := mcp.NewInMemoryTransports()
-		if _, err := wxServer.Connect(context.Background(), wst, nil); err != nil {
-			t.Fatalf("wechat server connect: %v", err)
-		}
-		wxClient := mcp.NewClient(&mcp.Implementation{Name: "eval-wx-client", Version: "test"}, nil)
-		wxCS, err := wxClient.Connect(context.Background(), wct, nil)
-		if err != nil {
-			t.Fatalf("wechat client connect: %v", err)
-		}
-
-		wxH := newEvalHarness(t, wxCS, BackendWeChat)
-		tasks = append(tasks, taskWeChatSnapshotClick(wxH))
-
-		wxH2 := newEvalHarness(t, wxCS, BackendWeChat)
-		tasks = append(tasks, taskWeChatNavigateStaleRef(wxH2))
-	}
 
 	// Build and print report.
 	report := evalReport{
@@ -474,7 +273,7 @@ func TestRuntime8Eval(t *testing.T) {
 		Summary: summarize(tasks),
 	}
 	reportJSON, _ := json.MarshalIndent(report, "", "  ")
-	t.Logf("Runtime 8.0 Evaluation Report:\n%s", string(reportJSON))
+	t.Logf("Evaluation Report:\n%s", string(reportJSON))
 
 	// Print summary line.
 	s := report.Summary
@@ -516,7 +315,6 @@ func TestEvalStaleRefSuccessSemantics(t *testing.T) {
 	staleDetected := true
 	recoverySucceeded := false
 
-	// This mirrors the logic in taskWeChatNavigateStaleRef.
 	if staleDetected && recoverySucceeded {
 		r.Success = true
 	}
@@ -539,38 +337,42 @@ func TestEvalStaleRefSuccessSemantics(t *testing.T) {
 }
 
 // TestEvalHarnessCallPropagatesIsError verifies that h.call propagates
-// MCP result IsError as a Go error. Without this, tasks like
-// wechat_navigate_stale_ref score false negatives because the expected
-// stale_reference error is swallowed (res.IsError=true but h.call
-// returns nil error).
-//
-// This test would FAIL before the fix: h.call did not check res.IsError.
+// MCP result IsError as a Go error. Without this, tasks score false
+// negatives because the expected error is swallowed (res.IsError=true
+// but h.call returns nil error).
 func TestEvalHarnessCallPropagatesIsError(t *testing.T) {
-	handlers := standardFakeHandlers()
-	handlers["App.getCurrentPage"] = func(_ json.RawMessage) (any, error) {
-		return fakeCurrentPageResult(1, "pages/index/index"), nil
+	// Build an in-memory MCP server that returns IsError=true for click.
+	server := mcp.NewServer(&mcp.Implementation{Name: "argus-eval-err", Version: "test"}, nil)
+	type clickTestInput struct {
+		Ref string `json:"ref,omitempty"`
 	}
-	handlers["Page.getElements"] = func(_ json.RawMessage) (any, error) {
-		return fakeElementsResult(fakeElementResult("elem-1", "view")), nil
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "click",
+		Description: "test click that always errors",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input clickTestInput) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: `{"error":"stale_reference: ref not found"}`},
+			},
+		}, nil, nil
+	})
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := server.Connect(context.Background(), st, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
 	}
-	handlers["Element.getWXML"] = func(p json.RawMessage) (any, error) {
-		return map[string]any{"wxml": "<view>hello</view>"}, nil
-	}
-	// Element.tap returns an error to simulate a stale_reference scenario.
-	// The MCP handler will set IsError=true in the result.
-	handlers["Element.tap"] = func(_ json.RawMessage) (any, error) {
-		return nil, fmt.Errorf("stale_reference: ref not found in registry")
+	client := mcp.NewClient(&mcp.Implementation{Name: "eval-err-client", Version: "test"}, nil)
+	cs, err := client.Connect(context.Background(), ct, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
 	}
 
-	cs, cleanup := setupFakeMCPServer(t, handlers)
-	defer cleanup()
-
-	h := newEvalHarness(t, cs.ClientSession, "wechat")
+	h := newEvalHarness(t, cs, "chrome")
 
 	// h.call should return a non-nil error when the MCP result has
 	// IsError=true. Before the fix, it returned (parsed, nil) — the
 	// error was silently swallowed.
-	_, err := h.call("click", map[string]any{"ref": "wx:nonexistent"})
+	_, err = h.call("click", map[string]any{"ref": "nonexistent"})
 	if err == nil {
 		t.Fatal("h.call should return error when MCP result IsError=true, got nil")
 	}

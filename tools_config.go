@@ -9,130 +9,43 @@ import (
 
 func registerConfigTools(server *mcp.Server) {
 	type configureInput struct {
-		URL       string `json:"url,omitempty"`
-		Port      int    `json:"port,omitempty"`
-		Attach    *bool  `json:"attach,omitempty"`
-		Profile   string `json:"profile,omitempty"`
-		Backend   string `json:"backend,omitempty"`    // "cdp" (default) or "wechat"
-		WxProject string `json:"wx_project,omitempty"` // compiled mp-weixin output dir
-		WxPort    int    `json:"wx_port,omitempty"`    // WeChat automator WebSocket port
+		URL     string `json:"url,omitempty"`
+		Port    int    `json:"port,omitempty"`
+		Attach  *bool  `json:"attach,omitempty"`
+		Profile string `json:"profile,omitempty"`
 	}
 
 	addTool(server, &mcp.Tool{
 		Name: "configure",
-		Description: "Configure the runtime target. Argus supports two backends:\n" +
-			"- backend=cdp (default): Chrome via CDP. Use url/port/attach/profile.\n" +
-			"- backend=wechat: WeChat DevTools Mini Program via the automator WebSocket.\n" +
+		Description: "Configure the runtime target. Chrome via CDP.\n" +
 			"\n" +
-			"CDP options:\n" +
+			"Options:\n" +
 			"- url: target URL (e.g. \"http://localhost:3003\")\n" +
 			"- port: dev server port (derives url as http://localhost:PORT)\n" +
 			"- attach: if true, don't launch Chrome — connect to an existing CDP endpoint at the configured port.\n" +
 			"- profile: \"isolated\" (default) or \"user\" (real Chrome profile with cookies/tokens)\n" +
 			"\n" +
-			"WeChat options (set backend=wechat):\n" +
-			"- wx_project: path to the compiled mp-weixin output (e.g. .../unpackage/dist/dev/mp-weixin)\n" +
-			"- wx_port: WeChat automator WebSocket port (default 9420). WeChat DevTools must be running with `cli auto --auto-port <port>`.\n" +
-			"\n" +
 			"Examples:\n" +
-			"  {\"url\": \"http://localhost:3003\"} — CDP: launch Chrome to localhost:3003\n" +
-			"  {\"backend\": \"wechat\", \"wx_project\": \"/path/to/mp-weixin\", \"wx_port\": 9420} — WeChat Mini Program\n" +
-			"  {\"port\": 9222, \"attach\": true, \"url\": \"http://localhost:3003\"} — CDP attach to existing Chrome",
+			"  {\"url\": \"http://localhost:3003\"} — launch Chrome to localhost:3003\n" +
+			"  {\"port\": 9222, \"attach\": true, \"url\": \"http://localhost:3003\"} — attach to existing Chrome",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input configureInput) (*mcp.CallToolResult, any, error) {
-		// Backend switch: if switching away from wechat, tear down the
-		// automator connection so the next call dials the new backend.
-		newBackend := strings.ToLower(strings.TrimSpace(input.Backend))
-		if newBackend != "" {
-			if err := setBackendValidated(newBackend); err != nil {
-				return nil, nil, &ToolError{
-					Code:    ErrInvalidInput,
-					Op:      "configure",
-					Message: err.Error(),
-				}
-			}
-			if activeBackend() != BackendWeChat {
-				closeAutomatorConn()
-			}
+		setConfig(input.URL, input.Port, input.Attach)
+		if input.Profile == "user" {
+			setProfile("user")
+		} else if input.Profile == "isolated" {
+			setProfile("isolated")
 		}
-		if strings.TrimSpace(input.WxProject) != "" {
-			setWxProject(input.WxProject)
-		}
-		if input.WxPort > 0 {
-			setWxPort(input.WxPort)
-		}
-		// CDP fields only apply under the cdp backend.
-		if activeBackend() == BackendCDP {
-			setConfig(input.URL, input.Port, input.Attach)
-			if input.Profile == "user" {
-				setProfile("user")
-			} else if input.Profile == "isolated" {
-				setProfile("isolated")
-			}
-		}
-		status, err := runtimeStatus()
+		status, err := browserStatus()
 		return nil, status, err
 	})
 
 	addTool(server, &mcp.Tool{
 		Name:        "status",
-		Description: "Return the current runtime status: active backend (cdp or wechat), configured URL/port (cdp), Chrome running state and tab/page info (cdp), or WeChat automator connection and current page (wechat).",
+		Description: "Return the current runtime status: configured URL/port, Chrome running state and tab/page info.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
-		status, err := runtimeStatus()
+		status, err := browserStatus()
 		return nil, status, err
 	})
-}
-
-// runtimeStatus returns status for the active backend. Under cdp it is the
-// historical browserStatus; under wechat it probes the automator connection
-// and current page.
-func runtimeStatus() (map[string]any, error) {
-	if activeBackend() == BackendWeChat {
-		return wechatStatus()
-	}
-	return browserStatus()
-}
-
-// wechatStatus reports the WeChat automator connection and current page.
-func wechatStatus() (map[string]any, error) {
-	status := backendInfo()
-	conn, err := getAutomatorConn()
-	if err != nil {
-		status["automator_connected"] = false
-		if te, ok := err.(*ToolError); ok {
-			status["automator_error"] = te.Message
-		} else {
-			status["automator_error"] = err.Error()
-		}
-		return status, nil
-	}
-	status["automator_connected"] = true
-	// Event buffer diagnostics (visible drops/truncation).
-	dropped, truncated, bytesIn := conn.eventStats()
-	if dropped > 0 {
-		status["events_dropped"] = dropped
-	}
-	if truncated > 0 {
-		status["events_truncated"] = truncated
-	}
-	if bytesIn > 0 {
-		status["event_bytes_in"] = bytesIn
-	}
-	// Current page
-	path, pageID, err := automatorCurrentPage()
-	if err != nil {
-		status["page_error"] = err.Error()
-		return status, nil
-	}
-	status["page"] = map[string]any{
-		"page_id": pageID,
-		"path":    path,
-	}
-	// Page stack depth (cheap, useful for navigation diagnostics)
-	stack, err := automatorPageStack()
-	if err == nil {
-		status["page_stack_depth"] = len(stack)
-	}
-	return status, nil
 }
 
 func browserStatus() (map[string]any, error) {
@@ -142,7 +55,6 @@ func browserStatus() (map[string]any, error) {
 		profileMode = "user"
 	}
 	status := map[string]any{
-		"backend":         BackendCDP,
 		"configured_url":  url,
 		"configured_port": port,
 		"cdp_port":        cdpPort,
@@ -157,7 +69,7 @@ func browserStatus() (map[string]any, error) {
 		status["browser_running"] = false
 		status["browser_error"] = err.Error()
 		if attach {
-			status["hint"] = "attach mode is on — make sure the external CDP target (e.g. WeChat DevTools) is running and exposing CDP at the configured port"
+			status["hint"] = "attach mode is on — make sure the external CDP target is running and exposing CDP at the configured port"
 		}
 		return status, nil
 	}

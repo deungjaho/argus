@@ -18,7 +18,7 @@ DOM 检查、网络拦截、诊断证据采集，全部通过可组合的 MCP �
 Features
 --------
 
-  * 55 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
+  * 51 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
   * Single Go binary, no runtime dependencies
   * Persistent CDP connection pool with health check and reconnect
   * Flight recorder: ring buffer captures actions and browser events

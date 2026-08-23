@@ -39,13 +39,12 @@ func registerNavigationTools(server *mcp.Server) {
 	})
 
 	type navigateInput struct {
-		URL  string `json:"url"`
-		Mode string `json:"mode,omitempty"` // WeChat only: reLaunch (default), navigateTo, redirectTo, switchTab, navigateBack
+		URL string `json:"url"`
 	}
 
 	addTool(server, &mcp.Tool{
 		Name:        "navigate",
-		Description: "Navigate the current tab to a new URL. Updates the configured URL. The targetID stays the same (same tab, different URL). Returns an actionable error with hints on DNS/SSL/timeout failures. Under the wechat backend, url is a Mini Program page path; set mode to navigateTo/redirectTo/switchTab/navigateBack (default reLaunch).",
+		Description: "Navigate the current tab to a new URL. Updates the configured URL. The targetID stays the same (same tab, different URL). Returns an actionable error with hints on DNS/SSL/timeout failures.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input navigateInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("navigate")
 		defer rec.End()
@@ -55,45 +54,6 @@ func registerNavigationTools(server *mcp.Server) {
 		if url == "" {
 			rec.SetErrorFromError(fmt.Errorf("url is required"))
 			return nil, nil, fmt.Errorf("url is required")
-		}
-		if activeBackend() == BackendWeChat {
-			// Mini Program navigation: url is a page path like
-			// "/pages/shop/index/index". The mode defaults to reLaunch
-			// for predictable state. An optional mode field selects
-			// navigateTo/redirectTo/switchTab/navigateBack.
-			// Magic URL prefixes (navigateTo: etc.) are accepted for
-			// backward compatibility but the typed mode field is preferred.
-			mode := ""
-			// Check for legacy magic prefix.
-			for _, prefix := range []string{"navigateTo:", "redirectTo:", "switchTab:", "navigateBack:", "reLaunch:"} {
-				if strings.HasPrefix(url, prefix) {
-					mode = strings.TrimSuffix(prefix, ":")
-					url = strings.TrimPrefix(url, prefix)
-					break
-				}
-			}
-			// Check typed mode field from navigateInput.
-			if mode == "" {
-				mode = strings.TrimSpace(input.Mode)
-			}
-			before, after, err := automatorNavigateTyped(mode, url)
-			if err != nil {
-				rec.SetError(formatWxError("navigate", err))
-				return nil, nil, err
-			}
-			result := map[string]any{
-				"action_id":   string(rec.ID),
-				"backend":     BackendWeChat,
-				"navigated":   modeForDisplay(mode),
-				"url":         url,
-				"before_path": before,
-				"after_path":  after,
-			}
-			if after != before {
-				result["route_changed"] = true
-			}
-			rec.SetResult(result)
-			return nil, result, nil
 		}
 		setConfig(url, 0, nil)
 		target, err := requireTarget()
@@ -234,12 +194,4 @@ func registerNavigationTools(server *mcp.Server) {
 		rec.SetResult(map[string]any{"refreshed": true, "ignored_cache": ignoreCache, "action_id": string(rec.ID)})
 		return nil, map[string]any{"refreshed": true, "ignored_cache": ignoreCache, "action_id": string(rec.ID)}, nil
 	})
-}
-
-// modeForDisplay returns the mode string for display, defaulting to reLaunch.
-func modeForDisplay(mode string) string {
-	if mode == "" {
-		return "reLaunch"
-	}
-	return mode
 }

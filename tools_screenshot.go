@@ -23,11 +23,8 @@ type screenshotFullPageInput struct {
 func registerScreenshotTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "screenshot",
-		Description: "Capture a compressed JPEG screenshot of the current viewport. Returns image + metadata (viewport dimensions, image dimensions, coordinate system). Use viewport x/y with click. Set grid=true to overlay a coordinate grid (use those x/y values with click or inspect_point). max_size_kb bounds the screenshot file (default 500, max 2000); if exceeded, truncation metadata is returned instead of the image. Under the wechat backend, captures the Mini Program simulator screen via App.captureScreenshot (grid is ignored).",
+		Description: "Capture a compressed JPEG screenshot of the current viewport. Returns image + metadata (viewport dimensions, image dimensions, coordinate system). Use viewport x/y with click. Set grid=true to overlay a coordinate grid (use those x/y values with click or inspect_point). max_size_kb bounds the screenshot file (default 500, max 2000); if exceeded, truncation metadata is returned instead of the image.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			return automatorScreenshotResult(input.MaxSizeKB)
-		}
 		return screenshotResult(input.Grid, input.MajorStep, input.MinorStep, input.MaxSizeKB)
 	})
 
@@ -216,5 +213,3 @@ document.documentElement.appendChild(overlay);
 requestAnimationFrame(() => resolve(true));
 }))()`, majorStep, minorStep)
 }
-
-// Ensure strings is referenced

@@ -143,7 +143,7 @@ func (e *ToolError) Error() string {
 //   core:     target + observe + act + wait (minimum for browser control)
 //   default:  compact interaction loop (configure/status/snapshot/click/fill/
 //             navigate/eval/screenshot/find/get_element/wait_for/exists/
-//             tool_summary + page_data). What agents see by default.
+//             tool_summary). What agents see by default.
 //   core:     full internal core (all target/observe/act/wait/navigate/
 //             emulate/storage tools). Use --toolsets=core to enable.
 //   diagnose: network + trace (evidence collection)

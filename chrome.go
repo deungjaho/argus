@@ -41,7 +41,7 @@ func ensureChromeRunning() error {
 			ErrorType: "chrome_not_responding",
 			Message:   fmt.Sprintf("attach mode: Chrome not responding on port %d (expected to be already running)", cdpPort),
 			Hints: []string{
-				"Make sure the external CDP target (e.g. WeChat DevTools) is running",
+				"Make sure the external CDP target is running",
 				fmt.Sprintf("Verify CDP is exposed at port %d", cdpPort),
 				"Check ARGUS_ATTACH / --attach configuration",
 			},

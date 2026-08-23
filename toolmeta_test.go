@@ -5,8 +5,8 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 60 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 60", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 56 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 56", len(toolMetaRegistry))
 	}
 }
 
@@ -21,34 +21,15 @@ func TestToolMetaDeprecatedAreCapFull(t *testing.T) {
 	}
 }
 
-func TestToolMetaWeChatEscapeHatchesAreCapFull(t *testing.T) {
-	// WeChat escape hatches must be CapFull (opt-in only).
-	// page_data is the one backend-specific default tool (no shared equivalent).
-	escapeHatches := []string{"call_wx_method", "mock_wx_method", "wxml"}
-	for _, name := range escapeHatches {
-		m := findToolMeta(name)
-		if m.Capability != CapFull {
-			t.Errorf("escape hatch %s capability = %s, want full (opt-in)", name, m.Capability)
-		}
-	}
-	// page_data is now CapCore (opt-in), not CapDefault, to keep the
-	// default surface compact and shared-semantic.
-	m := findToolMeta("page_data")
-	if m.Capability != CapCore {
-		t.Errorf("page_data capability = %s, want core (opt-in)", m.Capability)
-	}
-}
-
 func TestToolMetaDefaultLoopIsCompact(t *testing.T) {
 	// The default toolset should be compact: ~13 shared semantic tools.
-	// page_data moved to CapCore to keep the default surface shared-semantic.
-	// Count must be <= 14 (Runtime 8.0 gate).
+	// Count must be <= 14.
 	defaults := toolsForCapability(CapDefault)
 	if len(defaults) == 0 {
 		t.Fatal("default capability should have tools")
 	}
 	if len(defaults) > 14 {
-		t.Errorf("default toolset has %d tools, want <= 14 (Runtime 8.0 gate)", len(defaults))
+		t.Errorf("default toolset has %d tools, want <= 14", len(defaults))
 	}
 	t.Logf("default toolset: %d tools: %v", len(defaults), defaults)
 	// Verify the core interaction loop is present.

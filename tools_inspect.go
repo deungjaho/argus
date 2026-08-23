@@ -93,25 +93,6 @@ now: performance.now()
 		Name:        "exists",
 		Description: "Check if an element exists on the page. Returns {exists, visible, enabled, count} — never throws. With timeout_ms > 0, polls until found or timeout. Default timeout 0 (instant check).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input existsInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-			if selector == "" {
-				return nil, nil, &ToolError{
-					Code:    ErrInvalidInput,
-					Op:      "exists",
-					Message: "exists under wechat requires ref or selector (text search not supported)",
-				}
-			}
-			found, err := automatorExistsByRef(selector)
-			if err != nil {
-				return nil, nil, formatWxError("exists", err)
-			}
-			return nil, map[string]any{
-				"backend": BackendWeChat,
-				"exists":  found,
-				"ref":     selector,
-			}, nil
-		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err

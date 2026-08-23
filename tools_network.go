@@ -122,23 +122,6 @@ func registerNetworkTools(server *mcp.Server) {
 		Name:        "console_messages",
 		Description: "Capture console messages for a short duration (default 3s). Returns console.log/warn/error and uncaught exceptions. Set all=true to include all log levels (default only shows warnings, errors, and exceptions).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input consoleMessagesInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			// Ensure log subscription is on so events accumulate.
-			_ = automatorEnableLog()
-			limit := input.Limit
-			if limit == 0 {
-				limit = 50
-			}
-			messages, dropped, total := automatorRecentLogs(input.All, limit, input.MaxChars)
-			return nil, map[string]any{
-				"backend":        BackendWeChat,
-				"messages":       messages,
-				"count":          len(messages),
-				"events_total":   total,
-				"events_dropped": dropped,
-				"source":         "recorder",
-			}, nil
-		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err

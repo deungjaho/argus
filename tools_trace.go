@@ -150,98 +150,9 @@ func registerTraceTools(server *mcp.Server) {
 		}
 
 		// 1. Current page status (redacted)
-		var status map[string]any
-		if activeBackend() == BackendWeChat {
-			status, _ = wechatStatus()
-		} else {
-			status, _ = browserStatus()
-		}
+		status, _ := browserStatus()
 		if status != nil {
 			result["status"] = redactData(status)
-		}
-
-		if activeBackend() == BackendWeChat {
-			// WeChat backend: use automator event ring buffer for console/error evidence.
-			// Enable log subscription (idempotent) to ensure events are captured.
-			_ = automatorEnableLog()
-
-			// Fetch bounded recent logs (warnings/errors only by default).
-			maxChars := limit * 200 // bounded: ~200 chars per entry
-			logs, _, total := automatorRecentLogs(false, limit, maxChars)
-			consoleIssues := make([]map[string]any, 0, len(logs))
-			for _, l := range logs {
-				level, _ := l["level"].(string)
-				if level != "warn" && level != "error" {
-					continue
-				}
-				entry := map[string]any{
-					"timestamp": l["timestamp"],
-					"level":     level,
-					"text":      redactString(fmt.Sprintf("%v", l["text"])),
-				}
-				if seq, ok := l["seq"]; ok {
-					entry["seq"] = seq
-				}
-				consoleIssues = append(consoleIssues, entry)
-			}
-			result["console_issues"] = consoleIssues
-			result["console_issue_count"] = len(consoleIssues)
-
-			// WeChat exceptions are classified from log events.
-			allLogs, _, _ := automatorRecentLogs(true, limit, maxChars)
-			exceptions := make([]map[string]any, 0)
-			for _, l := range allLogs {
-				level, _ := l["level"].(string)
-				if level == "error" {
-					exceptions = append(exceptions, map[string]any{
-						"timestamp": l["timestamp"],
-						"text":      redactString(fmt.Sprintf("%v", l["text"])),
-						"seq":       l["seq"],
-					})
-				}
-			}
-			result["exceptions"] = exceptions
-			result["exception_count"] = len(exceptions)
-
-			// Recent failed actions from the action recorder.
-			actions := rec.QueryActions(ActionFilter{targetID: targetID, limit: limit * 2})
-			failedActions := []map[string]any{}
-			for _, a := range actions {
-				if a.Error == nil {
-					continue
-				}
-				failedActions = append(failedActions, map[string]any{
-					"action_id":  string(a.ID),
-					"op":         a.Op,
-					"target_id":  a.TargetID,
-					"error":      a.Error.Message,
-					"start_time": a.StartTime.Format(time.RFC3339Nano),
-				})
-			}
-			result["failed_actions"] = failedActions
-			result["failed_action_count"] = len(failedActions)
-
-			// Event ring buffer stats.
-			conn, _ := getAutomatorConn()
-			if conn != nil {
-				droppedCount, truncatedCount, bytesIn := conn.eventStats()
-				result["recorder"] = map[string]any{
-					"events_dropped":   droppedCount,
-					"events_truncated": truncatedCount,
-					"event_bytes_in":   bytesIn,
-					"total_events":     total,
-				}
-			}
-
-			// Summary.
-			issueCount := len(consoleIssues) + len(exceptions) + len(failedActions)
-			if issueCount == 0 {
-				result["summary"] = "no issues found in recent history"
-			} else {
-				result["summary"] = formatDiagnoseSummary(len(consoleIssues), len(exceptions), len(failedActions))
-			}
-
-			return nil, result, nil
 		}
 
 		// CDP backend: use the flight recorder.

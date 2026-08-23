@@ -27,13 +27,6 @@ func registerSnapshotTools(server *mcp.Server) {
 		Name:        "snapshot",
 		Description: "Return page text and visible interactive DOM elements with CSS refs that can be used by click/type tools. Coordinates are viewport CSS pixels. Output is bounded (max_text default 4000, max_elements default 80) with truncation metadata.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input snapshotInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			result, err := automatorSnapshot(input.MaxElements)
-			if err != nil {
-				return nil, nil, formatWxError("snapshot", err)
-			}
-			return nil, result, nil
-		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
@@ -125,10 +118,6 @@ func registerSnapshotTools(server *mcp.Server) {
 		Name:        "find",
 		Description: "Search the page for text or a regular expression. Returns matching elements with their CSS refs, text snippets, and bounding boxes. Cheaper than a full snapshot when you only need to locate an element. Output is bounded to 50 matches with truncation metadata.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findInput) (*mcp.CallToolResult, any, error) {
-		if activeBackend() == BackendWeChat {
-			result, err := automatorFind(input.Text, input.Regex)
-			return nil, result, err
-		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err

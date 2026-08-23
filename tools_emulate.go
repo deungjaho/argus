@@ -105,24 +105,6 @@ func registerEmulateTools(server *mcp.Server) {
 		rec := BeginAction("eval")
 		defer rec.End()
 
-		if activeBackend() == BackendWeChat {
-			rec.SetTarget(getCurrentTargetID())
-			rec.SetParams(input)
-			if strings.TrimSpace(input.Script) == "" {
-				err := fmt.Errorf("eval requires script")
-				rec.SetErrorFromError(err)
-				return nil, nil, err
-			}
-			value, err := automatorEvaluate(input.Script)
-			if err != nil {
-				rec.SetErrorFromError(err)
-				return nil, nil, err
-			}
-			result := map[string]any{"result": value, "action_id": string(rec.ID), "backend": BackendWeChat}
-			rec.SetResult(result)
-			return nil, result, nil
-		}
-
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)

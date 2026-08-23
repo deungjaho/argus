@@ -77,7 +77,7 @@ func main() {
 	// Toolset filtering: determines which tools are exposed to the MCP client.
 	// Default is "default" — the compact interaction loop
 	// (configure/status/snapshot/click/fill/navigate/eval/screenshot/find/
-	// get_element/wait_for/exists/tool_summary/page_data).
+	// get_element/wait_for/exists/tool_summary).
 	// Use "default,diagnose" to add evidence collection.
 	// Use "core" for the full internal core (all target/observe/act/wait/
 	// navigate/emulate/storage tools).
@@ -188,7 +188,6 @@ func registerAllTools(server *mcp.Server) {
 	registerMiscTools(server)
 	registerTraceTools(server)
 	registerDiscoveryTools(server)
-	registerAutomatorTools(server)
 }
 
 // runDoctor runs diagnostic checks and exits.
