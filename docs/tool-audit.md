@@ -1,11 +1,11 @@
-# Tool Audit: 43 Registered MCP Tools
+# Tool Audit: 44 Registered MCP Tools
 
 Date: 2026-07-28 (updated 2026-08-23)
-Status: Post-merge audit. Original 55-tool audit completed; deprecated tools
-removed (5), interaction tools merged (fill_form/select_option/key → fill/type),
+Status: Post-merge + perception layer. Original 55-tool audit completed;
+deprecated tools removed (5), interaction tools merged (fill_form/select_option/key → fill/type),
 navigation tools merged (go/refresh/wait_for_load → navigate/wait_for),
-emulation tools merged (resize/set_user_agent → emulate).
-Current surface: 43 canonical tools, 0 deprecated.
+emulation tools merged (resize/set_user_agent → emulate), look tool added
+(combined screenshot + element list). Current surface: 44 canonical tools, 0 deprecated.
 
 ## Methodology
 

@@ -113,14 +113,15 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{
+		result := map[string]any{
 			"action_id": string(rec.ID),
 			"clicked":   map[string]any{"x": x, "y": y, "button": button, "click_count": clickCount},
-		})
-		return nil, map[string]any{
-			"action_id": string(rec.ID),
-			"clicked":   map[string]any{"x": x, "y": y, "button": button, "click_count": clickCount},
-		}, nil
+		}
+		if page := miniSnapshot(ws); page != nil {
+			result["page"] = page
+		}
+		rec.SetResult(result)
+		return nil, result, nil
 	})
 
 	addTool(server, &mcp.Tool{
@@ -211,8 +212,12 @@ func registerInteractionTools(server *mcp.Server) {
 				}
 				results = append(results, map[string]any{"selector": selector, "filled": true})
 			}
-			rec.SetResult(map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)})
-			return nil, map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}, nil
+			result := map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}
+			if page := miniSnapshot(ws); page != nil {
+				result["page"] = page
+			}
+			rec.SetResult(result)
+			return nil, result, nil
 		}
 		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
 		if selector == "" {
@@ -229,8 +234,12 @@ func registerInteractionTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			rec.SetResult(map[string]any{"action_id": string(rec.ID), "selected": value})
-			return nil, map[string]any{"action_id": string(rec.ID), "selected": value}, nil
+			result := map[string]any{"action_id": string(rec.ID), "selected": value}
+			if page := miniSnapshot(ws); page != nil {
+				result["page"] = page
+			}
+			rec.SetResult(result)
+			return nil, result, nil
 		}
 		if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
 			rec.SetErrorFromError(err)
@@ -244,8 +253,12 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))})
-		return nil, map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))}, nil
+		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))}
+		if page := miniSnapshot(ws); page != nil {
+			result["page"] = page
+		}
+		rec.SetResult(result)
+		return nil, result, nil
 	})
 
 	addTool(server, &mcp.Tool{

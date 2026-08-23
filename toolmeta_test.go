@@ -5,8 +5,8 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 43 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 43", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 44 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 44", len(toolMetaRegistry))
 	}
 }
 

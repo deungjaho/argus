@@ -22,7 +22,8 @@ var toolMetaRegistry = []ToolMeta{
 	{Name: "fork", Capability: CapCore, SideEffects: []string{"creates_tab"}, Sensitivity: "low", Idempotent: false, Description: "Duplicate the current tab into a new tab."},
 
 	// --- Observe ---
-	// snapshot, screenshot, find, get_element are in the default loop.
+	// look, snapshot, screenshot, find, get_element are in the default loop.
+	{Name: "look", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Compressed screenshot plus interactive element list in one call."},
 	{Name: "snapshot", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return page text and visible interactive elements with refs."},
 	{Name: "a11y_snapshot", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Capture the accessibility tree."},
 	{Name: "screenshot", Capability: CapDefault, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture a viewport screenshot (optional grid overlay)."},

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,7 +24,110 @@ type findInput struct {
 	Regex string `json:"regex,omitempty"`
 }
 
+type lookInput struct {
+	MaxElements int `json:"max_elements,omitempty"`
+	MaxSizeKB   int `json:"max_size_kb,omitempty"`
+}
+
 func registerSnapshotTools(server *mcp.Server) {
+	addTool(server, &mcp.Tool{
+		Name:        "look",
+		Description: "See the page: returns a compressed screenshot plus a compact list of interactive elements with CSS refs and viewport coordinates. One call gives you both the visual layout and the actionable elements. Use this instead of calling snapshot + screenshot separately.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input lookInput) (*mcp.CallToolResult, any, error) {
+		target, err := requireTarget()
+		if err != nil {
+			return nil, nil, err
+		}
+		ws := target.WebSocketDebuggerURL
+
+		maxElements := input.MaxElements
+		if maxElements <= 0 {
+			maxElements = 40
+		}
+		if maxElements > 200 {
+			maxElements = 200
+		}
+		maxSizeKB := input.MaxSizeKB
+		if maxSizeKB <= 0 {
+			maxSizeKB = 200
+		}
+		if maxSizeKB > 2000 {
+			maxSizeKB = 2000
+		}
+
+		// Get compact snapshot (no full text, just summary + elements)
+		value, err := cdpEvaluate(ws, lookExpression(maxElements), true)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Capture compressed screenshot
+		pngData, err := cdpCaptureScreenshot(ws, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		path, err := defaultScreenshotPath()
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := writeCompressedScreenshot(pngData, path); err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+		jpegData, err := os.ReadFile(path)
+		if err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+
+		imageWidth, imageHeight, _ := imageDimensions(jpegData)
+		viewport, _ := viewportMetrics(ws)
+
+		// Build text metadata: summary + elements (no full page text)
+		meta := map[string]any{
+			"url":      target.URL,
+			"title":    target.Title,
+			"summary":  "",
+			"viewport": viewport,
+			"image":    map[string]any{"width": imageWidth, "height": imageHeight},
+			"bytes":    len(jpegData),
+			"elements": []any{},
+		}
+
+		if info, ok := value.(map[string]any); ok {
+			if s, ok := info["summary"].(string); ok {
+				meta["summary"] = s
+			}
+			if els, ok := info["interactive"].([]any); ok {
+				meta["elements"] = els
+				if trunc, _ := info["elements_truncated"].(bool); trunc {
+					attachTruncation(meta, TruncationMeta{Truncated: true, Reason: "max_elements"})
+				}
+			}
+		}
+
+		maxBytes := maxSizeKB * 1024
+		if len(jpegData) > maxBytes {
+			attachTruncation(meta, TruncationMeta{
+				Truncated:  true,
+				TotalCount: len(jpegData),
+				ShownCount: 0,
+				Reason:     fmt.Sprintf("screenshot %d bytes exceeds max_size_kb=%d; image omitted", len(jpegData), maxSizeKB),
+			})
+			meta["max_size_kb"] = maxSizeKB
+			metaText, _ := json.MarshalIndent(meta, "", "  ")
+			return &mcp.CallToolResult{Content: []mcp.Content{
+				&mcp.TextContent{Text: string(metaText)},
+			}}, nil, nil
+		}
+
+		metaText, _ := json.MarshalIndent(meta, "", "  ")
+		return &mcp.CallToolResult{Content: []mcp.Content{
+			&mcp.TextContent{Text: string(metaText)},
+			&mcp.ImageContent{Data: jpegData, MIMEType: "image/jpeg"},
+		}}, nil, nil
+	})
+
 	addTool(server, &mcp.Tool{
 		Name:        "snapshot",
 		Description: "Return page text and visible interactive DOM elements with CSS refs that can be used by click/type tools. Coordinates are viewport CSS pixels. Output is bounded (max_text default 4000, max_elements default 80) with truncation metadata.",
@@ -149,6 +254,30 @@ func registerSnapshotTools(server *mcp.Server) {
 	})
 }
 
+// miniSnapshot captures a compact page snapshot (summary + interactive
+// elements, max 20) and returns {"summary": "...", "elements": [...]}.
+// It is non-fatal: any failure returns nil so the calling operation's
+// result is never blocked.
+func miniSnapshot(ws string) map[string]any {
+	value, err := cdpEvaluate(ws, lookExpression(20), true)
+	if err != nil {
+		return nil
+	}
+	info, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	summary, _ := info["summary"].(string)
+	elements, _ := info["interactive"].([]any)
+	if elements == nil {
+		elements = []any{}
+	}
+	return map[string]any{
+		"summary":  summary,
+		"elements": elements,
+	}
+}
+
 type inspectPointInput struct {
 	X              *float64 `json:"x,omitempty"`
 	Y              *float64 `json:"y,omitempty"`
@@ -174,6 +303,65 @@ func filterA11yByDepth(nodes []map[string]any, maxDepth int) []map[string]any {
 	// For simplicity, just return all nodes — CDP a11y tree is already
 	// structured. Full depth filtering would require tree traversal.
 	return nodes
+}
+
+func lookExpression(maxElements int) string {
+	return fmt.Sprintf(`(() => {
+const maxElements = %d;
+const visible = (el) => {
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.right >= 0 && rect.top <= innerHeight && rect.left <= innerWidth;
+};
+const cssEscape = (value) => window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+const selectorFor = (el) => {
+  if (el.id) return '#' + cssEscape(el.id);
+  const testId = el.getAttribute('data-testid') || el.getAttribute('data-test-id');
+  if (testId) return '[' + (el.hasAttribute('data-testid') ? 'data-testid' : 'data-test-id') + '=' + JSON.stringify(testId) + ']';
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === 1 && node !== document.documentElement) {
+    let part = node.localName;
+    const parent = node.parentElement;
+    if (!parent) break;
+    const same = Array.from(parent.children).filter((child) => child.localName === node.localName);
+    if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+    parts.unshift(part);
+    const selector = parts.join(' > ');
+    if (document.querySelectorAll(selector).length === 1) return selector;
+    node = parent;
+  }
+  return parts.join(' > ');
+};
+const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,canvas,[role],[tabindex],[aria-label],[data-testid],[data-test-id]'));
+const interactive = [];
+let elementsTruncated = false;
+for (const el of candidates) {
+  if (!visible(el)) continue;
+  if (interactive.length >= maxElements) { elementsTruncated = true; break; }
+  const rect = el.getBoundingClientRect();
+  interactive.push({
+    ref: selectorFor(el),
+    tag: el.localName,
+    role: el.getAttribute('role') || '',
+    text: (el.innerText || '').trim().slice(0, 100),
+    ariaLabel: el.getAttribute('aria-label') || '',
+    placeholder: el.getAttribute('placeholder') || '',
+    rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
+  });
+}
+const counts = {};
+for (const e of interactive) counts[e.tag] = (counts[e.tag] || 0) + 1;
+const parts = [];
+for (const tag of Object.keys(counts).sort()) parts.push(counts[tag] + ' ' + tag + (counts[tag] > 1 ? 's' : ''));
+const hasForm = document.querySelector('form') !== null;
+const summary = document.title + ' — ' + (hasForm ? 'form page' : 'page') + ' with ' + (parts.length ? parts.join(', ') : 'no interactive elements');
+return {
+  summary: summary,
+  elements_truncated: elementsTruncated,
+  interactive
+};
+})()`, maxElements)
 }
 
 func snapshotExpression(maxText, maxElements int) string {
@@ -225,9 +413,16 @@ for (const el of candidates) {
 }
 const fullText = (document.body && document.body.innerText ? document.body.innerText : '');
 const textTruncated = fullText.length > maxText;
+const counts = {};
+for (const e of interactive) counts[e.tag] = (counts[e.tag] || 0) + 1;
+const parts = [];
+for (const tag of Object.keys(counts).sort()) parts.push(counts[tag] + ' ' + tag + (counts[tag] > 1 ? 's' : ''));
+const hasForm = document.querySelector('form') !== null;
+const summary = document.title + ' — ' + (hasForm ? 'form page' : 'page') + ' with ' + (parts.length ? parts.join(', ') : 'no interactive elements');
 return {
   url: location.href,
   title: document.title,
+  summary: summary,
   readyState: document.readyState,
   text: fullText.slice(0, maxText),
   text_truncated: textTruncated,

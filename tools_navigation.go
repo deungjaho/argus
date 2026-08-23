@@ -44,8 +44,12 @@ func registerNavigationTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			rec.SetResult(map[string]any{"refreshed": true, "ignored_cache": ignoreCache, "action_id": string(rec.ID)})
-			return nil, map[string]any{"refreshed": true, "ignored_cache": ignoreCache, "action_id": string(rec.ID)}, nil
+			result := map[string]any{"refreshed": true, "ignored_cache": ignoreCache, "action_id": string(rec.ID)}
+			if page := miniSnapshot(ws); page != nil {
+				result["page"] = page
+			}
+			rec.SetResult(result)
+			return nil, result, nil
 		}
 
 		// --- History navigation (back/forward) ---
@@ -69,8 +73,12 @@ func registerNavigationTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			rec.SetResult(map[string]any{"navigated": direction, "action_id": string(rec.ID)})
-			return nil, map[string]any{"navigated": direction, "action_id": string(rec.ID)}, nil
+			result := map[string]any{"navigated": direction, "action_id": string(rec.ID)}
+			if page := miniSnapshot(ws); page != nil {
+				result["page"] = page
+			}
+			rec.SetResult(result)
+			return nil, result, nil
 		}
 
 		// --- URL navigation ---
@@ -102,6 +110,9 @@ func registerNavigationTools(server *mcp.Server) {
 			status = map[string]any{}
 		}
 		status["action_id"] = string(rec.ID)
+		if page := miniSnapshot(target.WebSocketDebuggerURL); page != nil {
+			status["page"] = page
+		}
 		if err != nil {
 			rec.SetErrorFromError(err)
 		} else {
