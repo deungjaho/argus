@@ -5,19 +5,8 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 56 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 56", len(toolMetaRegistry))
-	}
-}
-
-func TestToolMetaDeprecatedAreCapFull(t *testing.T) {
-	// Deprecated aliases must be CapFull (hidden from default toolsets).
-	deprecated := []string{"open", "screenshot_grid", "navigate_back", "navigate_forward", "current_url"}
-	for _, name := range deprecated {
-		m := findToolMeta(name)
-		if m.Capability != CapFull {
-			t.Errorf("deprecated tool %s capability = %s, want full (hidden from default)", name, m.Capability)
-		}
+	if len(toolMetaRegistry) != 43 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 43", len(toolMetaRegistry))
 	}
 }
 

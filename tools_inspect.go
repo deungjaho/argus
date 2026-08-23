@@ -9,77 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// --- wait_for_load ---
-
-type waitForLoadInput struct {
-	WaitUntil string `json:"wait_until,omitempty"` // load | domcontentloaded | networkidle
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
-}
-
 func registerInspectTools(server *mcp.Server) {
-	addTool(server, &mcp.Tool{
-		Name:        "wait_for_load",
-		Description: "Wait for the page to finish loading. wait_until options: 'load' (full page load, default), 'domcontentloaded' (DOM ready, faster), 'networkidle' (no network requests for 500ms after readyState=complete). Default timeout 15s.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input waitForLoadInput) (*mcp.CallToolResult, any, error) {
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		waitUntil := strings.TrimSpace(input.WaitUntil)
-		if waitUntil == "" {
-			waitUntil = "load"
-		}
-		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 15 * time.Second
-		}
-		deadline := time.Now().Add(timeout)
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
-			default:
-			}
-			value, err := cdpEvaluate(ws, `(() => ({
-readyState: document.readyState,
-url: location.href,
-title: document.title,
-lastResourceTime: performance.getEntriesByType('resource').reduce((max, e) => Math.max(max, e.responseEnd || e.startTime || 0), 0),
-now: performance.now()
-}))()`, true)
-			if err == nil {
-				if info, ok := value.(map[string]any); ok {
-					readyState, _ := info["readyState"].(string)
-					switch waitUntil {
-					case "domcontentloaded":
-						if readyState == "interactive" || readyState == "complete" {
-							return nil, info, nil
-						}
-					case "load":
-						if readyState == "complete" {
-							return nil, info, nil
-						}
-					case "networkidle":
-						if readyState == "complete" {
-							// Check if no network activity in the last 500ms
-							lastResource, _ := numberValue(info["lastResourceTime"])
-							now, _ := numberValue(info["now"])
-							if now-lastResource >= 500 {
-								return nil, info, nil
-							}
-						}
-					}
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
-		return nil, map[string]any{"timed_out": true, "wait_until": waitUntil, "timeout_ms": timeout.Milliseconds()}, nil
-	})
-
 	// --- exists ---
 
 	type existsInput struct {
@@ -115,21 +45,6 @@ now: performance.now()
 		}
 		result, _ := checkElementExists(ws, selector, text)
 		return nil, result, nil
-	})
-
-	// --- current_url ---
-
-	addTool(server, &mcp.Tool{
-		Name:        "current_url",
-		Description: "Deprecated: use status instead. Get the current page URL and title.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
-		logWarn("current_url is deprecated, use status instead")
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		value, err := cdpEvaluate(ws, `(() => ({url: location.href, title: document.title, readyState: document.readyState}))()`, true)
-		return nil, value, err
 	})
 }
 

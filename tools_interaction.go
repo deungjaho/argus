@@ -30,40 +30,25 @@ type clickInput struct {
 type typeInput struct {
 	Ref       string `json:"ref,omitempty"`
 	Selector  string `json:"selector,omitempty"`
-	Text      string `json:"text"`
+	Text      string `json:"text,omitempty"`
+	Key       string `json:"key,omitempty"`
 	Clear     bool   `json:"clear,omitempty"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 	NoWait    bool   `json:"no_wait,omitempty"`
 }
 
 type fillInput struct {
-	Ref       string `json:"ref,omitempty"`
-	Selector  string `json:"selector,omitempty"`
-	Value     string `json:"value"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
-	NoWait    bool   `json:"no_wait,omitempty"`
-}
-
-type fillFormInput struct {
-	Fields []struct {
-		Ref      string `json:"ref"`
+	Ref      string   `json:"ref,omitempty"`
+	Selector string   `json:"selector,omitempty"`
+	Value    string   `json:"value,omitempty"`
+	Values   []string `json:"values,omitempty"`
+	Fields   []struct {
+		Ref      string `json:"ref,omitempty"`
 		Selector string `json:"selector,omitempty"`
 		Value    string `json:"value"`
-	} `json:"fields"`
+	} `json:"fields,omitempty"`
 	TimeoutMs int  `json:"timeout_ms,omitempty"`
 	NoWait    bool `json:"no_wait,omitempty"`
-}
-
-type selectOptionInput struct {
-	Ref       string   `json:"ref,omitempty"`
-	Selector  string   `json:"selector,omitempty"`
-	Values    []string `json:"values"`
-	TimeoutMs int      `json:"timeout_ms,omitempty"`
-	NoWait    bool     `json:"no_wait,omitempty"`
-}
-
-type keyInput struct {
-	Key string `json:"key"`
 }
 
 type scrollInput struct {
@@ -140,7 +125,7 @@ func registerInteractionTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "type",
-		Description: "Type text into the current focus or into a CSS ref/selector. Auto-waits for element. Set clear=true to clear before typing, no_wait=true to skip auto-wait.",
+		Description: "Type text into the current focus or into a CSS ref/selector, or send a keyboard key (Enter, Escape, Tab, Backspace, Delete, ArrowLeft/Right/Up/Down, Home, End, PageUp, PageDown, Space, or a single character). Auto-waits for element. Set clear=true to clear before typing, no_wait=true to skip auto-wait. Use text to type text or key to send a keyboard key.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input typeInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("type")
 		defer rec.End()
@@ -152,9 +137,18 @@ func registerInteractionTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
+		key := strings.TrimSpace(input.Key)
+		if key != "" {
+			if err := cdpDispatchKey(ws, key); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			rec.SetResult(map[string]any{"action_id": string(rec.ID), "key": key})
+			return nil, map[string]any{"action_id": string(rec.ID), "key": key}, nil
+		}
 		if input.Text == "" && !input.Clear {
-			rec.SetErrorFromError(fmt.Errorf("text is required"))
-			return nil, nil, fmt.Errorf("text is required")
+			rec.SetErrorFromError(fmt.Errorf("text or key is required"))
+			return nil, nil, fmt.Errorf("text or key is required")
 		}
 		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
 		if selector != "" {
@@ -182,7 +176,7 @@ func registerInteractionTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "fill",
-		Description: "Fill a single input/textarea/select with a value. Auto-waits for element. More reliable than type for form fields.",
+		Description: "Fill a single input/textarea/select with a value, fill multiple form fields at once, or select dropdown options. Auto-waits for element. More reliable than type for form fields. Use value for a single field, fields to fill multiple fields at once, or values (with ref/selector) to select dropdown options.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input fillInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("fill")
 		defer rec.End()
@@ -194,12 +188,50 @@ func registerInteractionTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
+		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+		if len(input.Fields) > 0 {
+			results := []map[string]any{}
+			for _, field := range input.Fields {
+				selector := firstNonEmpty(strings.TrimSpace(field.Ref), strings.TrimSpace(field.Selector))
+				if selector == "" {
+					results = append(results, map[string]any{"error": "no ref or selector", "value": field.Value})
+					continue
+				}
+				if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
+					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
+					continue
+				}
+				if _, err := cdpEvaluate(ws, focusExpression(selector, true), true); err != nil {
+					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
+					continue
+				}
+				if err := cdpInsertText(ws, field.Value); err != nil {
+					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
+					continue
+				}
+				results = append(results, map[string]any{"selector": selector, "filled": true})
+			}
+			rec.SetResult(map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)})
+			return nil, map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}, nil
+		}
 		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
 		if selector == "" {
 			rec.SetErrorFromError(fmt.Errorf("fill requires ref or selector"))
 			return nil, nil, fmt.Errorf("fill requires ref or selector")
 		}
-		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+		if len(input.Values) > 0 {
+			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			value, err := cdpEvaluate(ws, selectOptionExpression(selector, input.Values), true)
+			if err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			rec.SetResult(map[string]any{"action_id": string(rec.ID), "selected": value})
+			return nil, map[string]any{"action_id": string(rec.ID), "selected": value}, nil
+		}
 		if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
@@ -214,110 +246,6 @@ func registerInteractionTools(server *mcp.Server) {
 		}
 		rec.SetResult(map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))})
 		return nil, map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "fill_form",
-		Description: "Fill multiple form fields in one call. Auto-waits for each field. Each field needs ref or selector + value.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input fillFormInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("fill_form")
-		defer rec.End()
-		rec.SetParams(input)
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
-		results := []map[string]any{}
-		for _, field := range input.Fields {
-			selector := firstNonEmpty(strings.TrimSpace(field.Ref), strings.TrimSpace(field.Selector))
-			if selector == "" {
-				results = append(results, map[string]any{"error": "no ref or selector", "value": field.Value})
-				continue
-			}
-			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
-				results = append(results, map[string]any{"selector": selector, "error": err.Error()})
-				continue
-			}
-			if _, err := cdpEvaluate(ws, focusExpression(selector, true), true); err != nil {
-				results = append(results, map[string]any{"selector": selector, "error": err.Error()})
-				continue
-			}
-			if err := cdpInsertText(ws, field.Value); err != nil {
-				results = append(results, map[string]any{"selector": selector, "error": err.Error()})
-				continue
-			}
-			results = append(results, map[string]any{"selector": selector, "filled": true})
-		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)})
-		return nil, map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "select_option",
-		Description: "Select one or more options in a <select> dropdown by value. Auto-waits for the select element.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input selectOptionInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("select_option")
-		defer rec.End()
-		rec.SetParams(input)
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-		if selector == "" {
-			rec.SetErrorFromError(fmt.Errorf("select_option requires ref or selector"))
-			return nil, nil, fmt.Errorf("select_option requires ref or selector")
-		}
-		if len(input.Values) == 0 {
-			rec.SetErrorFromError(fmt.Errorf("select_option requires values"))
-			return nil, nil, fmt.Errorf("select_option requires values")
-		}
-		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
-		if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		value, err := cdpEvaluate(ws, selectOptionExpression(selector, input.Values), true)
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "selected": value})
-		return nil, map[string]any{"action_id": string(rec.ID), "selected": value}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "key",
-		Description: "Send a keyboard key: Enter, Escape, Tab, Backspace, Delete, ArrowLeft/Right/Up/Down, Home, End, PageUp, PageDown, Space, or a single character.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input keyInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("key")
-		defer rec.End()
-		rec.SetParams(input)
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		key := strings.TrimSpace(input.Key)
-		if key == "" {
-			rec.SetErrorFromError(fmt.Errorf("key is required"))
-			return nil, nil, fmt.Errorf("key is required")
-		}
-		if err := cdpDispatchKey(ws, key); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "key": key})
-		return nil, map[string]any{"action_id": string(rec.ID), "key": key}, nil
 	})
 
 	addTool(server, &mcp.Tool{

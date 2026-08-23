@@ -19,10 +19,6 @@ type pdfInput struct {
 	PrintBackground bool   `json:"print_background,omitempty"`
 }
 
-type setUserAgentInput struct {
-	UserAgent string `json:"user_agent"`
-}
-
 func registerMiscTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "pdf",
@@ -60,35 +56,6 @@ func registerMiscTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		return nil, map[string]any{"path": path, "bytes": len(data)}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "set_user_agent",
-		Description: "Override the browser's User-Agent string for subsequent requests. Useful for testing UA-based routing.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input setUserAgentInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("set_user_agent")
-		defer rec.End()
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		rec.SetParams(input)
-		ua := strings.TrimSpace(input.UserAgent)
-		if ua == "" {
-			err := fmt.Errorf("set_user_agent requires user_agent")
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		if err := cdpRequest(ws, "Network.setUserAgentOverride", map[string]any{"userAgent": ua}, nil); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		result := map[string]any{"set": true, "user_agent": ua, "action_id": string(rec.ID)}
-		rec.SetResult(result)
-		return nil, result, nil
 	})
 
 	addTool(server, &mcp.Tool{

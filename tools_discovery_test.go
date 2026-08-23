@@ -26,8 +26,8 @@ func TestBuildToolSummaryCounts(t *testing.T) {
 	if summary.Counts["canonical"] == 0 {
 		t.Error("expected non-zero canonical count")
 	}
-	if summary.Counts["deprecated"] == 0 {
-		t.Error("expected non-zero deprecated count (open, screenshot_grid, etc.)")
+	if summary.Counts["deprecated"] != 0 {
+		t.Errorf("expected zero deprecated count, got %d", summary.Counts["deprecated"])
 	}
 	if summary.Counts["trace"] != 3 {
 		t.Errorf("trace count = %d, want 3", summary.Counts["trace"])

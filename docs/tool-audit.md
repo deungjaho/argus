@@ -1,9 +1,11 @@
-# Tool Audit: 55 Registered MCP Tools
+# Tool Audit: 43 Registered MCP Tools
 
-Date: 2026-07-28
-Status: Original 51-tool audit completed; governance executed and trace tools
-added. Current public surface: 47 canonical tools, 5 deprecated aliases, and 3
-trace tools.
+Date: 2026-07-28 (updated 2026-08-23)
+Status: Post-merge audit. Original 55-tool audit completed; deprecated tools
+removed (5), interaction tools merged (fill_form/select_option/key → fill/type),
+navigation tools merged (go/refresh/wait_for_load → navigate/wait_for),
+emulation tools merged (resize/set_user_agent → emulate).
+Current surface: 43 canonical tools, 0 deprecated.
 
 ## Methodology
 

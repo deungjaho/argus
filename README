@@ -18,7 +18,7 @@ DOM 检查、网络拦截、诊断证据采集，全部通过可组合的 MCP �
 Features
 --------
 
-  * 51 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
+  * 43 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
   * Single Go binary, no runtime dependencies
   * Persistent CDP connection pool with health check and reconnect
   * Flight recorder: ring buffer captures actions and browser events
@@ -59,12 +59,12 @@ Toolsets
 
 `--toolsets` controls which tools are exposed to the MCP client.
 
-    default              compact agent loop (13 tools, ~1737 tokens)
+    default              compact agent loop (13 tools)
     default,diagnose     default + network, trace, console evidence
     core                 full internal core: navigate, interact, DOM, wait
     diagnose             network, trace, console, intercept, PDF
     debug                debugger + source mapping
-    full                 all tools + deprecated aliases
+    full                 all tools
 
 Can also be set via ARGUS_TOOLSETS environment variable.
 

@@ -29,14 +29,6 @@ func registerScreenshotTools(server *mcp.Server) {
 	})
 
 	addTool(server, &mcp.Tool{
-		Name:        "screenshot_grid",
-		Description: "Deprecated: use screenshot with grid=true instead. Capture a screenshot with an overlaid coordinate grid.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, any, error) {
-		logWarn("screenshot_grid is deprecated, use screenshot with grid=true")
-		return screenshotResult(true, input.MajorStep, input.MinorStep, input.MaxSizeKB)
-	})
-
-	addTool(server, &mcp.Tool{
 		Name:        "screenshot_full_page",
 		Description: "Capture a full-page screenshot (including content below the fold). Returns image + metadata.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {

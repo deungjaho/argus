@@ -15,7 +15,6 @@ var toolMetaRegistry = []ToolMeta{
 	// --- Target ---
 	// configure and status are in the default interaction loop.
 	{Name: "configure", Capability: CapDefault, SideEffects: []string{"launches_chrome", "sets_global_config"}, Sensitivity: "medium", Idempotent: true, Description: "Set target URL/port, attach mode, and profile."},
-	{Name: "open", Capability: CapFull, SideEffects: []string{"navigates", "may_launch_chrome"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use configure + navigate. Hidden from default toolsets."},
 	{Name: "new_tab", Capability: CapCore, SideEffects: []string{"creates_tab"}, Sensitivity: "low", Idempotent: false, Description: "Open a new browser tab."},
 	{Name: "list_tabs", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "List open browser tabs."},
 	{Name: "select_tab", Capability: CapCore, SideEffects: []string{"activates_tab"}, Sensitivity: "low", Idempotent: true, Description: "Activate a tab by id or url."},
@@ -27,7 +26,6 @@ var toolMetaRegistry = []ToolMeta{
 	{Name: "snapshot", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return page text and visible interactive elements with refs."},
 	{Name: "a11y_snapshot", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Capture the accessibility tree."},
 	{Name: "screenshot", Capability: CapDefault, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture a viewport screenshot (optional grid overlay)."},
-	{Name: "screenshot_grid", Capability: CapFull, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use screenshot with grid=true. Hidden from default toolsets."},
 	{Name: "screenshot_full_page", Capability: CapCore, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture a full-page screenshot."},
 	{Name: "inspect_point", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Inspect the element under a viewport or image coordinate."},
 	{Name: "find", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Search the page for text or regex; returns matching elements."},
@@ -36,11 +34,8 @@ var toolMetaRegistry = []ToolMeta{
 	// --- Act ---
 	// click and fill are in the default loop.
 	{Name: "click", Capability: CapDefault, SideEffects: []string{"clicks_element"}, Sensitivity: "low", Idempotent: false, Description: "Click an element by ref/selector/coordinates."},
-	{Name: "type", Capability: CapCore, SideEffects: []string{"types_text"}, Sensitivity: "low", Idempotent: false, Description: "Type text into a focused or selected element."},
-	{Name: "fill", Capability: CapDefault, SideEffects: []string{"fills_form_field"}, Sensitivity: "low", Idempotent: false, Description: "Fill a form field (clears first)."},
-	{Name: "fill_form", Capability: CapCore, SideEffects: []string{"fills_form_fields"}, Sensitivity: "low", Idempotent: false, Description: "Fill multiple form fields at once."},
-	{Name: "select_option", Capability: CapCore, SideEffects: []string{"selects_dropdown"}, Sensitivity: "low", Idempotent: false, Description: "Select a dropdown option by value or label."},
-	{Name: "key", Capability: CapCore, SideEffects: []string{"sends_key"}, Sensitivity: "low", Idempotent: false, Description: "Send a key or key combination."},
+	{Name: "type", Capability: CapCore, SideEffects: []string{"types_text", "sends_key"}, Sensitivity: "low", Idempotent: false, Description: "Type text into a focused or selected element, or send a keyboard key."},
+	{Name: "fill", Capability: CapDefault, SideEffects: []string{"fills_form_field", "fills_form_fields", "selects_dropdown"}, Sensitivity: "low", Idempotent: false, Description: "Fill a form field (clears first), fill multiple fields, or select dropdown options."},
 	{Name: "scroll", Capability: CapCore, SideEffects: []string{"scrolls_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Scroll the viewport by amount or to an element."},
 	{Name: "hover", Capability: CapCore, SideEffects: []string{"hovers_element"}, Sensitivity: "low", Idempotent: true, Description: "Hover over an element."},
 	{Name: "drag", Capability: CapCore, SideEffects: []string{"drags_element"}, Sensitivity: "low", Idempotent: false, Description: "Drag an element to a target or coordinate."},
@@ -49,23 +44,16 @@ var toolMetaRegistry = []ToolMeta{
 
 	// --- Wait ---
 	// wait_for and exists are in the default loop.
-	{Name: "wait_for", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Wait for a selector/text/condition with timeout."},
-	{Name: "wait_for_load", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Wait for page load to complete."},
+	{Name: "wait_for", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Wait for a selector/text/condition or page load with timeout."},
 	{Name: "exists", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Check if an element exists (never throws)."},
 	{Name: "try_until", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Retry an action until it succeeds or times out."},
 
 	// --- Navigate ---
 	// navigate is in the default loop.
-	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates"}, Sensitivity: "low", Idempotent: true, Description: "Navigate the current tab to a URL."},
-	{Name: "go", Capability: CapCore, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Go back or forward in browser history."},
-	{Name: "navigate_back", Capability: CapFull, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use go with direction=back. Hidden from default toolsets."},
-	{Name: "navigate_forward", Capability: CapFull, SideEffects: []string{"navigates_history"}, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use go with direction=forward. Hidden from default toolsets."},
-	{Name: "refresh", Capability: CapCore, SideEffects: []string{"reloads_page"}, Sensitivity: "low", Idempotent: true, Description: "Reload the current tab."},
+	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates", "navigates_history", "reloads_page"}, Sensitivity: "low", Idempotent: true, Description: "Navigate to a URL, go back/forward in history, or reload the current tab."},
 
 	// --- Emulate ---
-	{Name: "resize", Capability: CapCore, SideEffects: []string{"changes_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Resize the viewport."},
-	{Name: "emulate", Capability: CapCore, SideEffects: []string{"changes_viewport", "changes_user_agent"}, Sensitivity: "low", Idempotent: true, Description: "Emulate a device viewport and user agent."},
-	{Name: "set_user_agent", Capability: CapCore, SideEffects: []string{"changes_user_agent"}, Sensitivity: "low", Idempotent: true, Description: "Override the browser User-Agent string."},
+	{Name: "emulate", Capability: CapCore, SideEffects: []string{"changes_viewport", "changes_user_agent"}, Sensitivity: "low", Idempotent: true, Description: "Emulate a device viewport and user agent, or set a custom viewport size."},
 	// eval is in the default loop (escape hatch for runtime inspection).
 	{Name: "eval", Capability: CapDefault, SideEffects: []string{"executes_js"}, Sensitivity: "high", Idempotent: false, Description: "Evaluate JavaScript in the page (arbitrary code risk)."},
 
@@ -89,7 +77,6 @@ var toolMetaRegistry = []ToolMeta{
 	// --- Config ---
 	// status is in the default loop.
 	{Name: "status", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return current browser status and page state."},
-	{Name: "current_url", Capability: CapFull, Sensitivity: "low", Idempotent: true, Description: "Deprecated: use status. Hidden from default toolsets."},
 
 	// --- Trace (diagnose) ---
 	{Name: "timeline", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Return the unified action/event timeline."},

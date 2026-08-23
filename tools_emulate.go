@@ -8,13 +8,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type resizeInput struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
-}
-
 type emulateInput struct {
-	Device string `json:"device"`
+	Device    string `json:"device,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	UserAgent string `json:"user_agent,omitempty"`
 }
 
 type evalInput struct {
@@ -24,41 +22,8 @@ type evalInput struct {
 
 func registerEmulateTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
-		Name:        "resize",
-		Description: "Resize the browser viewport to specific width and height (in CSS pixels). Useful for testing responsive layouts.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input resizeInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("resize")
-		defer rec.End()
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		rec.SetParams(input)
-		if input.Width <= 0 || input.Height <= 0 {
-			err := fmt.Errorf("resize requires positive width and height")
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		if err := cdpRequest(ws, "Emulation.setDeviceMetricsOverride", map[string]any{
-			"width":             input.Width,
-			"height":            input.Height,
-			"deviceScaleFactor": 1,
-			"mobile":            false,
-		}, nil); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		result := map[string]any{"resized": true, "width": input.Width, "height": input.Height, "action_id": string(rec.ID)}
-		rec.SetResult(result)
-		return nil, result, nil
-	})
-
-	addTool(server, &mcp.Tool{
 		Name:        "emulate",
-		Description: "Emulate a device (iPhone, iPad, Pixel, etc.) by setting viewport size, device scale factor, and user agent.",
+		Description: "Emulate a device (iPhone, iPad, Pixel, etc.) or set a custom viewport size. Provide device for a preset, or width/height for custom dimensions. Optionally override the User-Agent string with user_agent.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input emulateInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("emulate")
 		defer rec.End()
@@ -71,29 +36,68 @@ func registerEmulateTools(server *mcp.Server) {
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
 		device := strings.TrimSpace(input.Device)
-		profile, ok := deviceProfiles[device]
-		if !ok {
-			err := fmt.Errorf("unknown device: %s (available: %s)", device, availableDevices())
+		ua := strings.TrimSpace(input.UserAgent)
+
+		// No-op if nothing to do.
+		if device == "" && (input.Width <= 0 || input.Height <= 0) && ua == "" {
+			err := fmt.Errorf("emulate requires device, width/height, or user_agent")
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		if err := cdpRequest(ws, "Emulation.setDeviceMetricsOverride", map[string]any{
-			"width":             profile.Width,
-			"height":            profile.Height,
-			"deviceScaleFactor": profile.ScaleFactor,
-			"mobile":            profile.Mobile,
-			"screenOrientation": map[string]any{"type": "portraitPrimary", "angle": 0},
-		}, nil); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		if profile.UserAgent != "" {
-			if err := cdpRequest(ws, "Network.setUserAgentOverride", map[string]any{"userAgent": profile.UserAgent}, nil); err != nil {
+
+		result := map[string]any{"action_id": string(rec.ID)}
+
+		// Device preset takes precedence for viewport metrics.
+		if device != "" {
+			profile, ok := deviceProfiles[device]
+			if !ok {
+				err := fmt.Errorf("unknown device: %s (available: %s)", device, availableDevices())
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
+			if err := cdpRequest(ws, "Emulation.setDeviceMetricsOverride", map[string]any{
+				"width":             profile.Width,
+				"height":            profile.Height,
+				"deviceScaleFactor": profile.ScaleFactor,
+				"mobile":            profile.Mobile,
+				"screenOrientation": map[string]any{"type": "portraitPrimary", "angle": 0},
+			}, nil); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			result["emulated"] = device
+			result["width"] = profile.Width
+			result["height"] = profile.Height
+			// A device preset may carry its own user agent unless an explicit
+			// override is supplied.
+			if ua == "" {
+				ua = profile.UserAgent
+			}
+		} else if input.Width > 0 && input.Height > 0 {
+			// Custom viewport resize.
+			if err := cdpRequest(ws, "Emulation.setDeviceMetricsOverride", map[string]any{
+				"width":             input.Width,
+				"height":            input.Height,
+				"deviceScaleFactor": 1,
+				"mobile":            false,
+			}, nil); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			result["resized"] = true
+			result["width"] = input.Width
+			result["height"] = input.Height
 		}
-		result := map[string]any{"emulated": device, "width": profile.Width, "height": profile.Height, "user_agent": profile.UserAgent, "action_id": string(rec.ID)}
+
+		// User-Agent override (from explicit input or device preset).
+		if ua != "" {
+			if err := cdpRequest(ws, "Network.setUserAgentOverride", map[string]any{"userAgent": ua}, nil); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			result["user_agent"] = ua
+		}
+
 		rec.SetResult(result)
 		return nil, result, nil
 	})

@@ -14,6 +14,7 @@ type waitForInput struct {
 	TextAbsent string `json:"text_absent,omitempty"`
 	Selector   string `json:"selector,omitempty"`
 	URLMatches string `json:"url_matches,omitempty"`
+	WaitUntil  string `json:"wait_until,omitempty"` // load | domcontentloaded | networkidle
 	TimeoutMs  int    `json:"timeout_ms,omitempty"`
 	PollMs     int    `json:"poll_ms,omitempty"`
 }
@@ -30,12 +31,70 @@ type tryUntilInput struct {
 func registerWaitTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "wait_for",
-		Description: "Wait for a page condition: text present, text absent, selector present, or URL match. Polls the page until the condition is met or timeout (default 10s). Responds to context cancellation.",
+		Description: "Wait for a page condition or page load. For element conditions, provide text, text_absent, selector, or url_matches (polls until met or timeout, default 10s). For page load, provide wait_until: 'load' (full page load, default), 'domcontentloaded' (DOM ready, faster), or 'networkidle' (no network requests for 500ms after readyState=complete). Default timeout for page load is 15s. Responds to context cancellation.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
+
+		// --- Page load waiting (wait_until) ---
+		if waitUntil := strings.TrimSpace(input.WaitUntil); waitUntil != "" {
+			if waitUntil != "load" && waitUntil != "domcontentloaded" && waitUntil != "networkidle" {
+				return nil, nil, fmt.Errorf("wait_until must be 'load', 'domcontentloaded', or 'networkidle'")
+			}
+			timeout := time.Duration(input.TimeoutMs) * time.Millisecond
+			if timeout <= 0 {
+				timeout = 15 * time.Second
+			}
+			deadline := time.Now().Add(timeout)
+			for time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
+				default:
+				}
+				value, err := cdpEvaluate(ws, `(() => ({
+readyState: document.readyState,
+url: location.href,
+title: document.title,
+lastResourceTime: performance.getEntriesByType('resource').reduce((max, e) => Math.max(max, e.responseEnd || e.startTime || 0), 0),
+now: performance.now()
+}))()`, true)
+				if err == nil {
+					if info, ok := value.(map[string]any); ok {
+						readyState, _ := info["readyState"].(string)
+						switch waitUntil {
+						case "domcontentloaded":
+							if readyState == "interactive" || readyState == "complete" {
+								return nil, info, nil
+							}
+						case "load":
+							if readyState == "complete" {
+								return nil, info, nil
+							}
+						case "networkidle":
+							if readyState == "complete" {
+								// Check if no network activity in the last 500ms
+								lastResource, _ := numberValue(info["lastResourceTime"])
+								now, _ := numberValue(info["now"])
+								if now-lastResource >= 500 {
+									return nil, info, nil
+								}
+							}
+						}
+					}
+				}
+				select {
+				case <-ctx.Done():
+					return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			return nil, map[string]any{"timed_out": true, "wait_until": waitUntil, "timeout_ms": timeout.Milliseconds()}, nil
+		}
+
+		// --- Element condition waiting ---
 		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
 		if timeout <= 0 {
 			timeout = 10 * time.Second
@@ -47,7 +106,7 @@ func registerWaitTools(server *mcp.Server) {
 		deadline := time.Now().Add(timeout)
 		condition := waitForExpression(input)
 		if condition == "" {
-			return nil, nil, fmt.Errorf("wait_for requires text, text_absent, selector, or url_matches")
+			return nil, nil, fmt.Errorf("wait_for requires text, text_absent, selector, url_matches, or wait_until")
 		}
 		for time.Now().Before(deadline) {
 			select {
