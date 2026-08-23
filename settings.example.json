@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "argus": {
+      "command": "/usr/local/bin/argus",
+      "args": [],
+      "env": {
+        "ARGUS_CDP_PORT": "9224"
+      }
+    }
+  }
+}

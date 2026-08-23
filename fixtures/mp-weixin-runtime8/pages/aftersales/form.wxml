@@ -1,0 +1,44 @@
+<!-- Runtime8 Fixture: after-sales form page (Scenario A & D) -->
+<!-- Root container has @tap=hideKeyboard to reproduce the real Lacoeur issue -->
+<view class="container" bindtap="hideKeyboard">
+  <view class="header">售后申请</view>
+
+  <!-- Nested labels with repeated "原因" text to force disambiguation -->
+  <view class="section">
+    <text class="label">退货原因</text>
+    <text class="sub-label">原因分类</text>
+  </view>
+
+  <!-- The actual textarea — must be uniquely identifiable despite duplicate "原因" -->
+  <textarea
+    class="reason-input"
+    name="原因描述"
+    placeholder="请输入退货原因"
+    value="{{reasonValue}}"
+    bindinput="onReasonInput"
+    data-field="reason"
+  ></textarea>
+
+  <!-- Second input with similar label -->
+  <view class="section">
+    <text class="label">联系人</text>
+    <input class="contact-input" placeholder="请输入联系人姓名" value="{{contactValue}}" bindinput="onContactInput" />
+  </view>
+
+  <!-- Initially disabled submit button. Uses catchtap to prevent
+       bubbling to the root @tap=hideKeyboard handler. -->
+  <button class="submit-btn" disabled="{{!canSubmit}}" catchtap="onSubmit">
+    {{submitLabel}}
+  </button>
+
+  <!-- Off-screen upload button (below viewport) -->
+  <view class="spacer"></view>
+  <button class="upload-btn" bindtap="onUpload">添加图片</button>
+
+  <!-- Visible state for assertions -->
+  <view class="status-area">
+    <text class="status-text">{{submitStatus}}</text>
+    <text class="keyboard-count">keyboard_hide_count: {{keyboardHideCount}}</text>
+    <text class="run-id" wx:if="{{savedRunId}}">run_id: {{savedRunId}}</text>
+  </view>
+</view>

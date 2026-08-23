@@ -1,0 +1,9 @@
+{
+  "desc": "Runtime8 isolated fixture for Argus acceptance testing",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "*"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+# Argus
+
+Agent 的浏览器 GDB。通过 CDP（Chrome DevTools Protocol）让 coding agent 独立操控浏览器、执行回归验证、采集运行证据。
+
+长期定位：agent 能完全操控浏览器、修改代码后自行验证，并把客户反馈从页面运行态定位到仓库源码。
+
+## 当前状态
+
+- 版本：0.1.0 alpha
+- 55 个 MCP 工具，覆盖导航、交互、截图、DOM、网络拦截、console、storage、设备模拟、飞行记录器
+- 单 Go 二进制，无运行时依赖
+- 持久 CDP 连接池、结构化日志、panic recovery、Chrome 健康检查和重连
+- 飞行记录器：ring buffer 持续捕获 action + console/exception/log 事件，支持 timeline 查询、diagnose 诊断、export_trace 证据导出
+- 安全加固：SSRF 防护、cookie 脱敏、上传路径规范化、trace 输出敏感数据 redaction
+- P1 已验收：173 个测试函数，包含 34 个真实 Chrome 集成测试；action 记录、目标隔离、统一时间线、完整对象脱敏、受控 trace 导出和证据完整性元数据已收口
+
+当前仍是 alpha：网络与导航事件尚未进入持久证据链，暂无 source map
+定位、snapshot diff、断点调试和多 session 隔离。下一阶段的范围与验收规范见
+[docs/roadmap.md](docs/roadmap.md)。
+
+未来计划提供可组合的开发文档获取辅助能力，包括 JavaScript 渲染、访问状态
+识别、正文提取和人工接管恢复，但不会提供 CAPTCHA 破解、指纹伪装或访问控制
+绕过。该能力的边界和启动门槛见
+[docs/document-acquisition.md](docs/document-acquisition.md)。
+
+## 构建
+
+```bash
+go build -o argus .
+```
+
+## 验证
+
+```bash
+gofmt -d *.go          # 格式检查
+go vet ./...           # 静态分析
+go test ./...          # 单元测试
+go test -race ./...    # 竞态检测
+go test -tags=integration ./...  # Chrome 集成测试（需要 Chrome）
+```
+
+## 使用
+
+通过 MCP client 配置：
+
+```json
+{
+  "mcpServers": {
+    "argus": {
+      "command": "/path/to/argus",
+      "args": ["--toolsets=default"]
+    }
+  }
+}
+```
+
+启动后调用 `configure` 工具设置目标 URL：
+
+```json
+{"url": "http://localhost:3000"}
+```
+
+### Toolsets
+
+`--toolsets` 控制暴露给 MCP client 的工具集。默认 `default` 是紧凑 agent
+语义循环（configure/status/snapshot/click/fill/navigate/screenshot/find/
+get_element/wait_for/exists/tool_summary/page_data），13 个工具，约 6951
+schema bytes（~1737 tokens）：
+
+| 值 | 说明 |
+|----|------|
+| `default` | 紧凑 agent 语义循环（默认，13 个工具） |
+| `default,diagnose` | default + 网络、trace、console 证据收集 |
+| `core` | 完整内部 core：导航、交互、截图、DOM、等待、storage、设备模拟 |
+| `diagnose` | 网络、trace、console、intercept、PDF（opt-in） |
+| `debug` | debugger + source mapping（opt-in） |
+| `full` | 全部工具 + deprecated aliases + escape hatches（opt-in） |
+
+也可通过 `ARGUS_TOOLSETS` 环境变量设置。
+
+### 飞行记录器
+
+Argus 内置飞行记录器，持续捕获浏览器事件和 agent 操作：
+
+- **timeline**：查询最近的 console/exception/log 事件和 action 记录
+- **diagnose**：一键诊断当前页面状态（console 错误 + 异常 + 失败的 action）
+- **export_trace**：导出 JSON 证据包（actions + events + status）
+
+所有 trace 输出经过敏感数据 redaction（JWT、Bearer token、password、API key、private key 等）。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ARGUS_CDP_PORT` | 9224 | Chrome CDP 端口 |
+| `ARGUS_PROFILE_DIR` | `~/.config/argus/chrome-profile` | Chrome profile 目录 |
+| `ARGUS_USE_USER_PROFILE` | false | 使用用户 profile（有安全风险） |
+| `ARGUS_CHROME_BINARY` | 自动检测 | Chrome 二进制路径 |
+| `ARGUS_LOG` | info | 日志级别（debug/info/warn/error） |
+| `ARGUS_TOOLSETS` | default | 暴露的工具集（default,core,diagnose,debug,full） |
+
+## 跟 chrome-devtools-mcp 的分工
+
+| 场景 | 用谁 |
+|------|------|
+| 高频操控、回归、截图、DOM、持续证据、源码定位 | Argus |
+| 性能 trace、复杂 DevTools 面板分析 | chrome-devtools-mcp |

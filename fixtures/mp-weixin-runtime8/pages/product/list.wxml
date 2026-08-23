@@ -1,0 +1,8 @@
+<!-- Runtime8 Fixture: product list page (Scenario B) -->
+<view class="container">
+  <view class="header">商品列表</view>
+  <view class="product-item" wx:for="{{products}}" wx:key="id">
+    <text class="product-name">{{item.name}}</text>
+    <text class="product-price">¥{{item.price}}</text>
+  </view>
+</view>

@@ -1,0 +1,21 @@
+<!-- Runtime8 Fixture: orders list page (Scenario C) -->
+<view class="container">
+  <view class="header">订单列表</view>
+
+  <!-- Loading skeleton -->
+  <view class="skeleton" wx:if="{{loading}}">
+    <text class="loading-text">加载中...</text>
+  </view>
+
+  <!-- 40 order rows -->
+  <view class="orders" wx:if="{{!loading}}">
+    <view class="order-row" wx:for="{{orders}}" wx:key="id" data-id="{{item.id}}" bindtap="onOrderTap">
+      <text class="order-id">{{item.id}}</text>
+      <text class="order-status">{{item.status}}</text>
+      <button class="detail-btn" data-index="{{index}}" catchtap="onDetailTap">查看详情</button>
+    </view>
+  </view>
+
+  <!-- Trigger for unhandled exception (diagnose testing) -->
+  <button class="error-trigger" bindtap="triggerError">触发异常</button>
+</view>

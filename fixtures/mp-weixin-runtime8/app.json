@@ -1,0 +1,16 @@
+{
+  "pages": [
+    "pages/aftersales/form",
+    "pages/product/detail",
+    "pages/home/index",
+    "pages/product/list",
+    "pages/orders/list"
+  ],
+  "window": {
+    "navigationBarTitleText": "Runtime8 Fixture",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
