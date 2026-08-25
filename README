@@ -6,13 +6,8 @@ CDP.  Agents navigate, interact, take screenshots, inspect the DOM,
 intercept network traffic, and collect diagnostic evidence — all
 through composable MCP tools.
 
-Long-term vision: a browser GDB for agents.  Observe, act, collect
-evidence, map runtime behavior to source code.
-
 通过 CDP 让 coding agent 可靠操控浏览器的 MCP server。导航、交互、截图、
 DOM 检查、网络拦截、诊断证据采集，全部通过可组合的 MCP 工具完成。
-
-长期定位：agent 的浏览器 GDB。观察、操作、采集证据、将运行态映射到源码。
 
 
 Features
