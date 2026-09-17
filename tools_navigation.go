@@ -97,9 +97,9 @@ func registerNavigationTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(target.ID)
-		_, err = cdpEvaluate(target.WebSocketDebuggerURL, fmt.Sprintf(`location.href = %s`, jsString(url)), true)
+		navResult, err := cdpPageNavigate(target.WebSocketDebuggerURL, url, 0)
 		if err != nil {
-			// Wrap navigation CDP/eval failures in an actionable error so
+			// Page.navigate errorText (net::ERR_*) feeds the classifier so
 			// the agent gets categorized hints (DNS, SSL, timeout, etc.).
 			navErr := newNavigationError(url, err.Error())
 			rec.SetErrorFromError(navErr)
@@ -110,6 +110,9 @@ func registerNavigationTools(server *mcp.Server) {
 			status = map[string]any{}
 		}
 		status["action_id"] = string(rec.ID)
+		for k, v := range navResult {
+			status[k] = v
+		}
 		if page := miniSnapshot(target.WebSocketDebuggerURL); page != nil {
 			status["page"] = page
 		}

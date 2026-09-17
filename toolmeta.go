@@ -126,12 +126,19 @@ func toolsForCapability(cap CapabilitySet) []string {
 
 // parseToolsets parses a comma-separated list of capability set names
 // and returns the union of tool names. "full" returns all tools.
-// Example: "core,diagnose" returns all core + diagnose tools.
+// The "default" set (the compact agent loop) is always included: it
+// contains the discovery and interaction primitives (tool_summary, eval,
+// navigate, click, screenshot, ...) without which an agent cannot operate,
+// so requesting e.g. "core,diagnose" still yields a working tool surface.
+// Example: "core,diagnose" returns default + core + diagnose tools.
 func parseToolsets(s string) []string {
 	if s == "" || s == "full" {
 		return toolsForCapability(CapFull)
 	}
 	seen := map[string]struct{}{}
+	for _, toolName := range toolsForCapability(CapDefault) {
+		seen[toolName] = struct{}{}
+	}
 	for _, name := range splitComma(s) {
 		cap := CapabilitySet(name)
 		for _, toolName := range toolsForCapability(cap) {

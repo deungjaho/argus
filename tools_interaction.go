@@ -32,6 +32,7 @@ type typeInput struct {
 	Selector  string `json:"selector,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Key       string `json:"key,omitempty"`
+	Modifiers string `json:"modifiers,omitempty"` // e.g. "ctrl", "cmd+shift" — with key only
 	Clear     bool   `json:"clear,omitempty"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 	NoWait    bool   `json:"no_wait,omitempty"`
@@ -126,7 +127,7 @@ func registerInteractionTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "type",
-		Description: "Type text into the current focus or into a CSS ref/selector, or send a keyboard key (Enter, Escape, Tab, Backspace, Delete, ArrowLeft/Right/Up/Down, Home, End, PageUp, PageDown, Space, or a single character). Auto-waits for element. Set clear=true to clear before typing, no_wait=true to skip auto-wait. Use text to type text or key to send a keyboard key.",
+		Description: "Type text into the current focus or into a CSS ref/selector, or send a keyboard key (Enter, Escape, Tab, Backspace, Delete, ArrowLeft/Right/Up/Down, Home, End, PageUp, PageDown, Space, or a single character). Auto-waits for element. Set clear=true to clear before typing, no_wait=true to skip auto-wait. Use text to type text or key to send a keyboard key; combine with modifiers (e.g. \"cmd+a\", \"ctrl+shift\") for shortcuts.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input typeInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("type")
 		defer rec.End()
@@ -140,7 +141,7 @@ func registerInteractionTools(server *mcp.Server) {
 		rec.SetTarget(getCurrentTargetID())
 		key := strings.TrimSpace(input.Key)
 		if key != "" {
-			if err := cdpDispatchKey(ws, key); err != nil {
+			if err := cdpDispatchKey(ws, key, modifierMask(input.Modifiers)); err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}

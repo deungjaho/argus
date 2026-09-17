@@ -49,7 +49,7 @@ func main() {
 	fs.BoolVar(&attach, "attach", false, "attach to existing CDP endpoint instead of launching Chrome (also set ARGUS_ATTACH env)")
 	fs.StringVar(&profile, "profile", "", "profile mode: isolated (default) or user (use real Chrome profile with cookies/tokens)")
 	fs.BoolVar(&debug, "debug", false, "enable debug logging to stderr")
-	fs.StringVar(&toolsets, "toolsets", "", "comma-separated capability sets to expose (default,core,diagnose,debug,full). Default: default (compact interaction loop). Use core for full internal core, full for deprecated aliases + escape hatches. Also set ARGUS_TOOLSETS env.")
+	fs.StringVar(&toolsets, "toolsets", "", "comma-separated capability sets to expose on top of the always-on default loop (default,core,diagnose,debug,full). 'full' exposes everything including deprecated aliases + escape hatches. Also set ARGUS_TOOLSETS env.")
 	var doctor bool
 	fs.BoolVar(&doctor, "doctor", false, "run diagnostic checks and exit")
 	_ = fs.Parse(os.Args[1:])
@@ -75,13 +75,12 @@ func main() {
 		setProfile("user")
 	}
 	// Toolset filtering: determines which tools are exposed to the MCP client.
-	// Default is "default" — the compact interaction loop
-	// (configure/status/snapshot/click/fill/navigate/eval/screenshot/find/
-	// get_element/wait_for/exists/tool_summary).
-	// Use "default,diagnose" to add evidence collection.
-	// Use "core" for the full internal core (all target/observe/act/wait/
-	// navigate/emulate/storage tools).
-	// Use "full" for deprecated aliases + escape hatches + everything.
+	// The "default" loop (configure/status/snapshot/click/fill/navigate/eval/
+	// screenshot/find/get_element/wait_for/exists/tool_summary) is always on —
+	// it is the minimum surface an agent needs to function. Named sets add
+	// on top: "diagnose" for evidence collection, "core" for internal
+	// primitives (tab management, storage, intercepts, emulate), "debug" for
+	// debugger tools, "full" for everything including deprecated aliases.
 	if toolsets == "" {
 		toolsets = os.Getenv("ARGUS_TOOLSETS")
 	}
@@ -96,6 +95,7 @@ func main() {
 	}
 
 	logInfo("toolsets: %s (%d tools enabled)", toolsets, len(enabledTools))
+	go cleanupScreenshots()
 
 	attachPtr := &attach
 	if url != "" || port > 0 {
@@ -198,16 +198,23 @@ func runDoctor(toolsets string) {
 	fmt.Println("ok      argus")
 
 	// CDP port reachability (check first — if CDP is up, Chrome is running).
+	// Check the configured port first, then the well-known defaults.
 	reachable := false
-	cdpPort := 0
+	foundPort := 0
+	ports := []int{cdpPort}
 	for _, p := range []int{9222, 9224} {
+		if p != cdpPort {
+			ports = append(ports, p)
+		}
+	}
+	for _, p := range ports {
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/json/version", p))
 		if err == nil {
 			resp.Body.Close()
 			fmt.Printf("ok      cdp-port-%d\n", p)
 			reachable = true
-			cdpPort = p
+			foundPort = p
 			break
 		}
 	}
@@ -216,7 +223,7 @@ func runDoctor(toolsets string) {
 	if bin, err := findChromeBinary(); err == nil && bin != "" {
 		fmt.Printf("ok      chrome (%s)\n", bin)
 	} else if reachable {
-		fmt.Printf("ok      chrome (running via CDP %d, binary not in standard paths)\n", cdpPort)
+		fmt.Printf("ok      chrome (running via CDP %d, binary not in standard paths)\n", foundPort)
 	} else {
 		fmt.Println("missing chrome (install Google Chrome or Chromium)")
 		failed = 1

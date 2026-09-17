@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,6 +19,7 @@ type emulateInput struct {
 type evalInput struct {
 	Script       string `json:"script"`
 	AwaitPromise bool   `json:"await_promise,omitempty"`
+	TimeoutMs    int    `json:"timeout_ms,omitempty"` // CDP call timeout (default 10s); raise for long await_promise work
 }
 
 func registerEmulateTools(server *mcp.Server) {
@@ -104,7 +106,7 @@ func registerEmulateTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "eval",
-		Description: "Evaluate a JavaScript expression on the page and return the result. Set await_promise=true to wait for promises.",
+		Description: "Evaluate a JavaScript expression on the page and return the result. Set await_promise=true to wait for promises, timeout_ms to raise the 10s call timeout. Top-level const/let persist across calls; scripts that hit 'already been declared' are automatically retried in an isolated scope.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input evalInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("eval")
 		defer rec.End()
@@ -121,13 +123,22 @@ func registerEmulateTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		value, err := cdpEvaluate(ws, input.Script, input.AwaitPromise)
+		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
+		value, err := cdpEvaluateTimeout(ws, input.Script, input.AwaitPromise, timeout)
+		if err != nil && strings.Contains(err.Error(), "has already been declared") {
+			// const/let from earlier eval calls persist in the global scope.
+			// eval() runs the script in its own declarative environment —
+			// declarations don't leak, and the completion value is preserved.
+			value, err = cdpEvaluateTimeout(ws, "eval("+jsString(input.Script)+")", input.AwaitPromise, timeout)
+		}
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
 		if m, ok := value.(map[string]any); ok {
-			m["action_id"] = string(rec.ID)
+			if _, exists := m["action_id"]; !exists {
+				m["action_id"] = string(rec.ID)
+			}
 			rec.SetResult(m)
 			return nil, m, nil
 		}

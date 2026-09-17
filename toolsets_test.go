@@ -89,6 +89,14 @@ func TestToolEnabledCoreDiagnose(t *testing.T) {
 	if !toolEnabled("intercept") {
 		t.Error("intercept should be enabled in core,diagnose")
 	}
+	// The default loop is always on: core,diagnose must still expose
+	// eval/click/navigate or the agent has no usable interaction surface.
+	if !toolEnabled("eval") {
+		t.Error("eval should be enabled in core,diagnose (default loop is always on)")
+	}
+	if !toolEnabled("click") {
+		t.Error("click should be enabled in core,diagnose (default loop is always on)")
+	}
 }
 
 func TestAddToolFiltersCorrectly(t *testing.T) {

@@ -17,6 +17,21 @@ func defaultScreenshotPath() (string, error) {
 	return filepath.Join(os.TempDir(), "argus-screenshot-"+time.Now().Format("20060102-150405.000000000")+".jpg"), nil
 }
 
+// cleanupScreenshots removes argus screenshot temp files older than 24h.
+// Screenshots are debugging artifacts; without GC they accumulate forever.
+func cleanupScreenshots() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "argus-screenshot-*.jpg"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, p := range matches {
+		if info, err := os.Stat(p); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(p)
+		}
+	}
+}
+
 func imageDimensions(data []byte) (int, int, bool) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {

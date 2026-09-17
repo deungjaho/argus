@@ -129,20 +129,28 @@ func cdpTargetForURL(targetURL string) (*browserTarget, error) {
 // --- CDP WebSocket request (uses connection pool) ---
 
 func cdpRequest(wsURL, method string, params any, result any) error {
+	return cdpRequestTimeout(wsURL, method, params, result, 10*time.Second)
+}
+
+func cdpRequestTimeout(wsURL, method string, params any, result any, timeout time.Duration) error {
 	conn, err := getConn(wsURL)
 	if err != nil {
 		return err
 	}
-	return conn.call(method, params, result, 10*time.Second)
+	return conn.call(method, params, result, timeout)
 }
 
 func cdpEvaluate(pageWSURL, expression string, awaitPromise bool) (any, error) {
+	return cdpEvaluateTimeout(pageWSURL, expression, awaitPromise, 10*time.Second)
+}
+
+func cdpEvaluateTimeout(pageWSURL, expression string, awaitPromise bool, timeout time.Duration) (any, error) {
 	var result browserRuntimeEvaluateResult
-	if err := cdpRequest(pageWSURL, "Runtime.evaluate", map[string]any{
+	if err := cdpRequestTimeout(pageWSURL, "Runtime.evaluate", map[string]any{
 		"expression":    expression,
 		"returnByValue": true,
 		"awaitPromise":  awaitPromise,
-	}, &result); err != nil {
+	}, &result, timeout); err != nil {
 		return nil, err
 	}
 	if result.ExceptionDetails != nil {
@@ -208,6 +216,55 @@ func cdpPageReload(pageWSURL string, ignoreCache bool) error {
 	return cdpRequest(pageWSURL, "Page.reload", params, nil)
 }
 
+// cdpPageNavigate navigates via Page.navigate (not location.href eval) so
+// errorText (net::ERR_*) is available for error classification, then waits
+// for Page.loadEventFired up to loadTimeout. A timed-out load is reported
+// in the result, not returned as an error.
+func cdpPageNavigate(pageWSURL, url string, loadTimeout time.Duration) (map[string]any, error) {
+	conn, err := getConn(pageWSURL)
+	if err != nil {
+		return nil, err
+	}
+	sub := conn.subscribeEvents("navigate", 16, false)
+	defer conn.hub.unsubscribe(sub)
+	_ = cdpRequest(pageWSURL, "Page.enable", map[string]any{}, nil)
+	var nav struct {
+		FrameID   string `json:"frameId"`
+		LoaderID  string `json:"loaderId"`
+		ErrorText string `json:"errorText"`
+	}
+	if err := cdpRequest(pageWSURL, "Page.navigate", map[string]any{"url": url}, &nav); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(nav.ErrorText) != "" {
+		return nil, fmt.Errorf("%s", nav.ErrorText)
+	}
+	result := map[string]any{"frame_id": nav.FrameID}
+	if nav.LoaderID != "" {
+		result["loader_id"] = nav.LoaderID
+	}
+	if loadTimeout <= 0 {
+		loadTimeout = 15 * time.Second
+	}
+	timer := time.NewTimer(loadTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case ev, ok := <-sub.ch:
+			if !ok || ev == nil {
+				return result, nil
+			}
+			if ev.Method == "Page.loadEventFired" {
+				result["loaded"] = true
+				return result, nil
+			}
+		case <-timer.C:
+			result["load_timed_out"] = true
+			return result, nil
+		}
+	}
+}
+
 func cdpCaptureScreenshot(pageWSURL string, fullPage bool) ([]byte, error) {
 	var result struct {
 		Data string `json:"data"`
@@ -250,26 +307,23 @@ func cdpDispatchMouseHover(pageWSURL string, x, y float64) error {
 }
 
 func cdpDispatchScroll(pageWSURL string, x, y, deltaX, deltaY float64) (any, error) {
-	return cdpEvaluate(pageWSURL, fmt.Sprintf(`(() => {
-const x = %s;
-const y = %s;
-const deltaX = %s;
-const deltaY = %s;
-const target = document.elementFromPoint(x, y) || document.scrollingElement || document.body;
-const event = new WheelEvent('wheel', {deltaX, deltaY, clientX: x, clientY: y, bubbles: true, cancelable: true});
-const defaultAllowed = target.dispatchEvent(event);
-if (defaultAllowed) window.scrollBy(deltaX, deltaY);
-return {defaultAllowed, scrollX: window.scrollX, scrollY: window.scrollY};
-})()`, jsNumber(x), jsNumber(y), jsNumber(deltaX), jsNumber(deltaY)), true)
+	// mouseWheel goes through the real input pipeline: trusted wheel events
+	// fire scroll listeners and lazy loaders, unlike synthetic dispatchEvent.
+	if err := cdpRequest(pageWSURL, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseWheel", "x": x, "y": y, "deltaX": deltaX, "deltaY": deltaY,
+	}, nil); err != nil {
+		return nil, err
+	}
+	return cdpEvaluate(pageWSURL, `(() => ({scrollX: window.scrollX, scrollY: window.scrollY}))()`, true)
 }
 
 func cdpInsertText(pageWSURL, text string) error {
 	return cdpRequest(pageWSURL, "Input.insertText", map[string]any{"text": text}, nil)
 }
 
-func cdpDispatchKey(pageWSURL, key string) error {
+func cdpDispatchKey(pageWSURL, key string, modifiers int) error {
 	info := keyInfo(key)
-	down := map[string]any{"type": "keyDown", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode}
+	down := map[string]any{"type": "keyDown", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode, "modifiers": modifiers}
 	if info.Text != "" {
 		down["text"] = info.Text
 		down["unmodifiedText"] = info.Text
@@ -277,8 +331,29 @@ func cdpDispatchKey(pageWSURL, key string) error {
 	if err := cdpRequest(pageWSURL, "Input.dispatchKeyEvent", down, nil); err != nil {
 		return err
 	}
-	up := map[string]any{"type": "keyUp", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode}
+	up := map[string]any{"type": "keyUp", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode, "modifiers": modifiers}
 	return cdpRequest(pageWSURL, "Input.dispatchKeyEvent", up, nil)
+}
+
+// modifierMask parses "ctrl+shift", "cmd", etc. into the CDP modifiers
+// bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+func modifierMask(s string) int {
+	mask := 0
+	for _, tok := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return r == '+' || r == ',' || r == ' '
+	}) {
+		switch tok {
+		case "alt", "option":
+			mask |= 1
+		case "ctrl", "control":
+			mask |= 2
+		case "meta", "cmd", "command":
+			mask |= 4
+		case "shift":
+			mask |= 8
+		}
+	}
+	return mask
 }
 
 type browserKey struct {

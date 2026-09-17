@@ -84,6 +84,20 @@ func navigationErrorType(errText string) (string, []string) {
 			"Check if the server is running on the target port",
 			"Verify firewall rules are not blocking the connection",
 		}
+	case strings.Contains(lower, "err_connection_closed") || strings.Contains(lower, "err_connection_reset") ||
+		strings.Contains(lower, "err_connection_failed") || strings.Contains(lower, "err_connection_aborted") ||
+		strings.Contains(lower, "err_address_unreachable") || strings.Contains(lower, "err_network_unreachable") ||
+		strings.Contains(lower, "err_internet_disconnected") || strings.Contains(lower, "err_network_changed"):
+		return "navigation_network_error", []string{
+			"Check network connectivity and proxy settings",
+			"Verify the hostname resolves (DNS) and the port is reachable",
+			"Check if a VPN or firewall is intercepting the connection",
+		}
+	case strings.Contains(lower, "err_aborted") || strings.Contains(lower, "err_blocked"):
+		return "navigation_aborted", []string{
+			"The navigation was aborted or blocked (download, CSP, or client-side block)",
+			"Use diagnose/timeline to inspect what interrupted the navigation",
+		}
 	default:
 		return "navigation_failed", []string{
 			"Check the URL and network connectivity",

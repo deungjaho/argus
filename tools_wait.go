@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -20,12 +21,10 @@ type waitForInput struct {
 }
 
 type tryUntilInput struct {
-	Tool        string         `json:"tool"`
-	Params      map[string]any `json:"params"`
-	Condition   string         `json:"condition,omitempty"`
-	TimeoutMs   int            `json:"timeout_ms,omitempty"`
-	PollMs      int            `json:"poll_ms,omitempty"`
-	MaxAttempts int            `json:"max_attempts,omitempty"`
+	Condition   string `json:"condition,omitempty"`
+	TimeoutMs   int    `json:"timeout_ms,omitempty"`
+	PollMs      int    `json:"poll_ms,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
 
 func registerWaitTools(server *mcp.Server) {
@@ -48,18 +47,61 @@ func registerWaitTools(server *mcp.Server) {
 				timeout = 15 * time.Second
 			}
 			deadline := time.Now().Add(timeout)
+
+			// networkidle counts real in-flight requests via Network domain
+			// events. performance.getEntriesByType only lists *completed*
+			// resources, so a pending fetch would look like idle — it isn't.
+			var netSub *eventSubscription
+			inFlight := map[string]struct{}{}
+			lastActivity := time.Now()
+			if waitUntil == "networkidle" {
+				if conn, err := getConn(ws); err == nil {
+					netSub = conn.subscribeEvents("networkidle", 256, false)
+					_ = cdpRequest(ws, "Network.enable", map[string]any{}, nil)
+					defer conn.hub.unsubscribe(netSub)
+				}
+			}
+			drainNet := func() {
+				if netSub == nil {
+					return
+				}
+				for {
+					select {
+					case ev, ok := <-netSub.ch:
+						if !ok || ev == nil {
+							return
+						}
+						var p struct {
+							RequestID string `json:"requestId"`
+						}
+						_ = json.Unmarshal(ev.Params, &p)
+						switch ev.Method {
+						case "Network.requestWillBeSent":
+							if p.RequestID != "" {
+								inFlight[p.RequestID] = struct{}{}
+							}
+							lastActivity = time.Now()
+						case "Network.loadingFinished", "Network.loadingFailed":
+							delete(inFlight, p.RequestID)
+							lastActivity = time.Now()
+						}
+					default:
+						return
+					}
+				}
+			}
+
 			for time.Now().Before(deadline) {
 				select {
 				case <-ctx.Done():
 					return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
 				default:
 				}
+				drainNet()
 				value, err := cdpEvaluate(ws, `(() => ({
 readyState: document.readyState,
 url: location.href,
-title: document.title,
-lastResourceTime: performance.getEntriesByType('resource').reduce((max, e) => Math.max(max, e.responseEnd || e.startTime || 0), 0),
-now: performance.now()
+title: document.title
 }))()`, true)
 				if err == nil {
 					if info, ok := value.(map[string]any); ok {
@@ -74,13 +116,8 @@ now: performance.now()
 								return nil, info, nil
 							}
 						case "networkidle":
-							if readyState == "complete" {
-								// Check if no network activity in the last 500ms
-								lastResource, _ := numberValue(info["lastResourceTime"])
-								now, _ := numberValue(info["now"])
-								if now-lastResource >= 500 {
-									return nil, info, nil
-								}
+							if readyState == "complete" && len(inFlight) == 0 && time.Since(lastActivity) >= 500*time.Millisecond {
+								return nil, info, nil
 							}
 						}
 					}
@@ -133,7 +170,7 @@ now: performance.now()
 
 	addTool(server, &mcp.Tool{
 		Name:        "try_until",
-		Description: "Poll a JS condition on the page until it returns truthy or timeout. NOTE: this tool does NOT call other tools — the tool/params fields are reserved for future use. Use this to wait for a condition before calling click/type/fill separately. The condition is a JS expression evaluated on the page.",
+		Description: "Poll a JS condition on the page until it returns truthy or timeout. Use this to wait for a condition before calling click/type/fill separately. The condition is a JS expression evaluated on the page.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input tryUntilInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
