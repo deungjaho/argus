@@ -4,27 +4,50 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+type navigateInput struct {
+	URL         string `json:"url,omitempty"`
+	Direction   string `json:"direction,omitempty"` // "back" or "forward"
+	Refresh     bool   `json:"refresh,omitempty"`
+	Reload      bool   `json:"reload,omitempty"`
+	IgnoreCache bool   `json:"ignore_cache,omitempty"`
+	Href        string `json:"href,omitempty"`
+	Target      string `json:"target,omitempty"`
+	TargetID    string `json:"target_id,omitempty"`
+	TabID       string `json:"tab_id,omitempty"`
+	TimeoutMs   int    `json:"timeout_ms,omitempty"`
+	Timeout     int    `json:"timeout,omitempty"`
+	WaitUntil   string `json:"wait_until,omitempty"`
+}
+
 func registerNavigationTools(server *mcp.Server) {
-	type navigateInput struct {
-		URL         string `json:"url,omitempty"`
-		Direction   string `json:"direction,omitempty"` // "back" or "forward"
-		Refresh     bool   `json:"refresh,omitempty"`
-		IgnoreCache bool   `json:"ignore_cache,omitempty"`
-	}
 
 	addTool(server, &mcp.Tool{
 		Name:        "navigate",
 		Description: "Navigate to a URL, go back/forward in browser history, or reload the current tab. Provide url to navigate to a new page, direction (back/forward) for history navigation, or refresh=true to reload the current tab (use ignore_cache=true to bypass cache). Returns an actionable error with hints on DNS/SSL/timeout failures.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input navigateInput) (*mcp.CallToolResult, any, error) {
-		url := strings.TrimSpace(input.URL)
+		url := resolveURL(input.URL, input.Href, input.Target)
+		if url != "" {
+			url = normalizeURL(url)
+		}
 		direction := strings.TrimSpace(input.Direction)
+		isRefresh := input.Refresh || input.Reload
+
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID)
+		if targetID == "" && input.Target != "" && !looksLikeURL(input.Target) {
+			targetID = strings.TrimSpace(input.Target)
+		}
+		if targetID != "" {
+			setCurrentTargetID(targetID)
+		}
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
 
 		// --- Refresh (reload current tab) ---
-		if input.Refresh {
+		if isRefresh {
 			rec := BeginAction("refresh")
 			defer rec.End()
 			rec.SetParams(input)
@@ -48,6 +71,7 @@ func registerNavigationTools(server *mcp.Server) {
 			if page := miniSnapshot(ws); page != nil {
 				result["page"] = page
 			}
+			attachEvidence(rec, ws, result)
 			rec.SetResult(result)
 			return nil, result, nil
 		}
@@ -77,6 +101,7 @@ func registerNavigationTools(server *mcp.Server) {
 			if page := miniSnapshot(ws); page != nil {
 				result["page"] = page
 			}
+			attachEvidence(rec, ws, result)
 			rec.SetResult(result)
 			return nil, result, nil
 		}
@@ -92,18 +117,76 @@ func registerNavigationTools(server *mcp.Server) {
 		}
 		setConfig(url, 0, nil)
 		target, err := requireTarget()
+		_, _, attach := getConfig()
+
+		var fallbackTab bool
+		if attach {
+			if err != nil {
+				// No matching tab found or current target is closed/missing.
+				fallbackTab = true
+			} else if target != nil && (target.URL == "about:blank" || target.URL == "") {
+				// Current target is about:blank; open a new tab with the target URL.
+				fallbackTab = true
+			}
+		}
+
+		if fallbackTab {
+			version, vErr := cdpVersion()
+			if vErr != nil {
+				rec.SetErrorFromError(vErr)
+				return nil, nil, vErr
+			}
+			tabID, cErr := cdpCreateTarget(version.WebSocketDebuggerURL, url, !wantFocus())
+			if cErr != nil {
+				rec.SetErrorFromError(cErr)
+				return nil, nil, fmt.Errorf("failed to create tab in attach mode: %w", cErr)
+			}
+			setCurrentTargetID(tabID)
+			if wantFocus() {
+				_ = cdpActivateTarget(tabID)
+			}
+			rec.SetTarget(tabID)
+
+			for attempt := 0; attempt < 5; attempt++ {
+				targets, _ := cdpTargets()
+				if t := findTargetByID(targets, tabID); t != nil && t.WebSocketDebuggerURL != "" {
+					target = t
+					break
+				}
+				time.Sleep(30 * time.Millisecond)
+			}
+			baseURL := cdpBaseURL()
+			wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/devtools/page/" + tabID
+			if target == nil {
+				target = &browserTarget{ID: tabID, URL: url, WebSocketDebuggerURL: wsURL}
+			} else if target.WebSocketDebuggerURL == "" {
+				target.WebSocketDebuggerURL = wsURL
+			}
+			err = nil
+		}
+
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
 		rec.SetTarget(target.ID)
-		navResult, err := cdpPageNavigate(target.WebSocketDebuggerURL, url, 0)
-		if err != nil {
-			// Page.navigate errorText (net::ERR_*) feeds the classifier so
-			// the agent gets categorized hints (DNS, SSL, timeout, etc.).
-			navErr := newNavigationError(url, err.Error())
-			rec.SetErrorFromError(navErr)
-			return nil, nil, navErr
+		var navResult map[string]any
+		if target.WebSocketDebuggerURL != "" {
+			navResult, err = cdpPageNavigate(target.WebSocketDebuggerURL, url, time.Duration(timeoutMs)*time.Millisecond)
+			if err != nil {
+				// Page.navigate errorText (net::ERR_*) feeds the classifier so
+				// the agent gets categorized hints (DNS, SSL, timeout, etc.).
+				navErr := newNavigationError(url, err.Error())
+				rec.SetErrorFromError(navErr)
+				return nil, nil, navErr
+			}
+			if input.WaitUntil != "" {
+				waitTimeout := time.Duration(timeoutMs) * time.Millisecond
+				if waitTimeout <= 0 {
+					waitTimeout = 15 * time.Second
+				}
+				_, _ = waitForPageLoad(ctx, target.WebSocketDebuggerURL, input.WaitUntil, waitTimeout)
+			}
 		}
 		status, err := browserStatus()
 		if status == nil {
@@ -113,8 +196,11 @@ func registerNavigationTools(server *mcp.Server) {
 		for k, v := range navResult {
 			status[k] = v
 		}
-		if page := miniSnapshot(target.WebSocketDebuggerURL); page != nil {
-			status["page"] = page
+		if target.WebSocketDebuggerURL != "" {
+			if page := miniSnapshot(target.WebSocketDebuggerURL); page != nil {
+				status["page"] = page
+			}
+			attachEvidence(rec, target.WebSocketDebuggerURL, status)
 		}
 		if err != nil {
 			rec.SetErrorFromError(err)

@@ -10,16 +10,26 @@ import (
 )
 
 type emulateInput struct {
-	Device    string `json:"device,omitempty"`
-	Width     int    `json:"width,omitempty"`
-	Height    int    `json:"height,omitempty"`
-	UserAgent string `json:"user_agent,omitempty"`
+	Device         string `json:"device,omitempty"`
+	Width          int    `json:"width,omitempty"`
+	Height         int    `json:"height,omitempty"`
+	UserAgent      string `json:"user_agent,omitempty"`
+	UserAgentCamel string `json:"userAgent,omitempty"`
+	Target         string `json:"target,omitempty"`
+	TargetID       string `json:"target_id,omitempty"`
+	TabID          string `json:"tab_id,omitempty"`
 }
 
 type evalInput struct {
-	Script       string `json:"script"`
+	Script       string `json:"script,omitempty"`
+	Expression   string `json:"expression,omitempty"`
+	Code         string `json:"code,omitempty"`
 	AwaitPromise bool   `json:"await_promise,omitempty"`
 	TimeoutMs    int    `json:"timeout_ms,omitempty"` // CDP call timeout (default 10s); raise for long await_promise work
+	Timeout      int    `json:"timeout,omitempty"`
+	Target       string `json:"target,omitempty"`
+	TargetID     string `json:"target_id,omitempty"`
+	TabID        string `json:"tab_id,omitempty"`
 }
 
 func registerEmulateTools(server *mcp.Server) {
@@ -30,6 +40,10 @@ func registerEmulateTools(server *mcp.Server) {
 		rec := BeginAction("emulate")
 		defer rec.End()
 
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
+		if targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -38,7 +52,7 @@ func registerEmulateTools(server *mcp.Server) {
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
 		device := strings.TrimSpace(input.Device)
-		ua := strings.TrimSpace(input.UserAgent)
+		ua := resolveFirstNonEmpty(input.UserAgent, input.UserAgentCamel)
 
 		// No-op if nothing to do.
 		if device == "" && (input.Width <= 0 || input.Height <= 0) && ua == "" {
@@ -106,11 +120,15 @@ func registerEmulateTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "eval",
-		Description: "Evaluate a JavaScript expression on the page and return the result. Set await_promise=true to wait for promises, timeout_ms to raise the 10s call timeout. Top-level const/let persist across calls; scripts that hit 'already been declared' are automatically retried in an isolated scope.",
+		Description: "Evaluate a JavaScript expression on the page and return the result. Accepts script or expression. Set await_promise=true to wait for promises, timeout_ms to raise the 10s call timeout. Top-level const/let persist across calls; scripts that hit 'already been declared' are automatically retried in an isolated scope.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input evalInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("eval")
 		defer rec.End()
 
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
+		if targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -118,18 +136,20 @@ func registerEmulateTools(server *mcp.Server) {
 		}
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
-		if strings.TrimSpace(input.Script) == "" {
-			err := fmt.Errorf("eval requires script")
+		script := resolveFirstNonEmpty(input.Script, input.Expression, input.Code)
+		if script == "" {
+			err := fmt.Errorf("eval requires script or expression")
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-		value, err := cdpEvaluateTimeout(ws, input.Script, input.AwaitPromise, timeout)
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+		timeout := time.Duration(timeoutMs) * time.Millisecond
+		value, err := cdpEvaluateTimeout(ws, script, input.AwaitPromise, timeout)
 		if err != nil && strings.Contains(err.Error(), "has already been declared") {
 			// const/let from earlier eval calls persist in the global scope.
 			// eval() runs the script in its own declarative environment —
 			// declarations don't leak, and the completion value is preserved.
-			value, err = cdpEvaluateTimeout(ws, "eval("+jsString(input.Script)+")", input.AwaitPromise, timeout)
+			value, err = cdpEvaluateTimeout(ws, "eval("+jsString(script)+")", input.AwaitPromise, timeout)
 		}
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -139,10 +159,12 @@ func registerEmulateTools(server *mcp.Server) {
 			if _, exists := m["action_id"]; !exists {
 				m["action_id"] = string(rec.ID)
 			}
+			attachEvidence(rec, ws, m)
 			rec.SetResult(m)
 			return nil, m, nil
 		}
 		result := map[string]any{"result": value, "action_id": string(rec.ID)}
+		attachEvidence(rec, ws, result)
 		rec.SetResult(result)
 		return nil, result, nil
 	})

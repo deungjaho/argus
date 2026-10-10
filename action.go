@@ -106,6 +106,19 @@ func (r *ActionRecord) SetErrorFromError(err error) {
 	r.Error = &ToolError{Message: err.Error()}
 }
 
+// attachEvidence appends events observed since ar started (console
+// errors/warnings, exceptions, network failures, URL navigations) to
+// the tool result map under "evidence". Call before SetResult so the
+// action record captures it too. No-op when nothing noteworthy happened.
+func attachEvidence(ar *ActionRecord, wsURL string, result map[string]any) {
+	if ar == nil || result == nil {
+		return
+	}
+	if ev := rec.EvidenceSince(targetIDFromWSURL(wsURL), ar.StartTime); ev != nil {
+		result["evidence"] = ev
+	}
+}
+
 // SetParams records a sanitized, truncated summary of the action's
 // input parameters. The summary is truncated to maxParamSummaryLen
 // bytes to bound recorder memory.

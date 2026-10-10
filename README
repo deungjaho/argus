@@ -13,12 +13,19 @@ DOM 检查、网络拦截、诊断证据采集，全部通过可组合的 MCP �
 Features
 --------
 
-  * 44 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
+  * 48 MCP tools across 5 toolsets (default, core, diagnose, debug, full)
   * Single Go binary, no runtime dependencies
   * Persistent CDP connection pool with health check and reconnect
   * Flight recorder: ring buffer captures actions and browser events
+  * Action results carry incremental evidence (console errors, failed
+    requests, navigations) — agents see what each action actually did
+  * Stable snapshot refs: snapshot/look return snapshot_id; click/fill
+    accept snapshot=<id> for stale-reference detection
+  * diff_snapshot reports added/removed/recreated/changed elements
+  * start_recording/stop_recording: record a human session, replay it
+    as batch_actions
   * Timeline query, diagnose, and trace export with redaction
-  * SSRF protection, cookie redaction, upload path canonicalization
+  * URL scheme allowlist, cookie/secret redaction, upload path canonicalization
   * macOS, Linux, and Windows Chrome discovery
 
 
@@ -53,15 +60,53 @@ Toolsets
 --------
 
 `--toolsets` controls which tools are exposed to the MCP client.
+The `default` loop (14 tools: navigate, eval, click, fill, snapshot, look,
+screenshot, find, get_element, wait_for, exists, configure, status,
+tool_summary) is always enabled — named sets add on top of it.
 
-    default              compact agent loop (13 tools)
-    default,diagnose     default + network, trace, console evidence
-    core                 full internal core: navigate, interact, DOM, wait
-    diagnose             network, trace, console, intercept, PDF
-    debug                debugger + source mapping
-    full                 all tools
+    default              compact agent loop only (no extra sets)
+    core                 + tabs, scroll, type, emulate, batch_actions,
+                           diff_snapshot, recording
+    diagnose             + network, trace, console, intercept, PDF
+    debug                + debugger + source mapping
+    full                 all tools, incl. deprecated aliases/escape hatches
 
+Example: `--toolsets=core,diagnose` exposes default + core + diagnose.
 Can also be set via ARGUS_TOOLSETS environment variable.
+
+
+Snapshots and batch actions
+---------------------------
+
+snapshot/look store the interactive-element map and return a
+snapshot_id.  Pass it to click/fill as {"snapshot": "snap_0001"} to get
+stale-reference errors instead of silently clicking a re-rendered node.
+
+diff_snapshot compares the current page to a stored snapshot:
+added/removed/recreated/changed elements, URL change, plus evidence
+collected since that snapshot.
+
+batch_actions steps: click, fill, type, wait_for, hover, scroll,
+navigate, assert (element/text/url check), extract (name=value pulled
+from an element into {{name}} variables usable by later steps), and an
+optional flag per step to skip failures instead of aborting.
+
+start_recording injects a listener that captures human clicks/fills/keys
+across navigations; stop_recording returns steps in batch_actions format
+(replay verbatim) and saves them under ~/.local/share/argus/recordings/.
+
+
+Window focus
+------------
+
+By default Argus never covers your screen: Chrome launches hidden in the
+background and tabs are created/selected without raising the window.
+Everything still works — screenshot, snapshot, click, evaluate do not
+require the window to be visible.
+
+Pass `--focus` (or `ARGUS_FOCUS=true`, or `{"focus": true}` via the
+configure tool) to opt into foreground behavior: Chrome activates on
+launch and new/selected tabs are raised to the front.
 
 
 Flight recorder
@@ -86,6 +131,10 @@ Environment variables
     ARGUS_CHROME_BINARY     auto-detect                       Chrome binary path
     ARGUS_LOG               info                              log level
     ARGUS_TOOLSETS          default                           exposed toolsets
+    ARGUS_URL               (none)                            initial target URL
+    ARGUS_ATTACH            false                             attach, don't launch
+    ARGUS_PROFILE           isolated                          isolated|user
+    ARGUS_FOCUS             false                             foreground Chrome
 
 
 Development

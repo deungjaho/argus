@@ -18,6 +18,7 @@ var (
 	configuredPort    int
 	configuredAttach  bool   // attach mode: don't launch Chrome, connect to existing CDP
 	configuredProfile string // "isolated" or "user"
+	configuredFocus   bool   // bring Chrome windows/tabs to the foreground (default: stay in background)
 
 	// Fixed at startup from env vars
 	cdpPort    int
@@ -74,6 +75,24 @@ func useUserProfile() bool {
 	return configuredProfile == "user"
 }
 
+// setFocus records whether argus may bring Chrome to the foreground.
+// Default false: tabs are created in the background and no window
+// activation is performed, so the agent never covers the user's screen.
+func setFocus(v bool) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	configuredFocus = v
+}
+
+// wantFocus reports whether foreground behavior is enabled (--focus /
+// ARGUS_FOCUS). When false, createTarget uses background tabs and
+// Target.activateTarget calls are skipped.
+func wantFocus() bool {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return configuredFocus
+}
+
 func getConfig() (string, int, bool) {
 	configMu.RLock()
 	defer configMu.RUnlock()
@@ -84,12 +103,12 @@ func getConfig() (string, int, bool) {
 // Uses targetID as stable identity, falls back to URL for backward compat.
 // In launch mode: launches Chrome if not running, creates tab if none matches.
 // In attach mode: just connects to the existing CDP endpoint, no launching.
-func requireTarget() (*browserTarget, error) {
-	return resolveTarget()
+func requireTarget(targetID ...string) (*browserTarget, error) {
+	return resolveTarget(targetID...)
 }
 
-func requireTargetWS() (string, error) {
-	target, err := requireTarget()
+func requireTargetWS(targetID ...string) (string, error) {
+	target, err := requireTarget(targetID...)
 	if err != nil {
 		return "", err
 	}

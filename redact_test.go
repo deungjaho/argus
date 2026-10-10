@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -130,5 +131,48 @@ func TestIsSensitiveKey(t *testing.T) {
 		if isSensitiveKey(key) {
 			t.Errorf("isSensitiveKey(%q) = true, want false", key)
 		}
+	}
+}
+
+func TestRedactPreservesStackTraceAndLineNumbers(t *testing.T) {
+	// A real stack trace that mentions authorization and passwords
+	rawTrace := "Error: Uncaught exception at /app/src/services/authorizationService.ts:42:15 in checkAuth() - connect failed with password=supersecret123&user=admin and Authorization: Bearer secret_token_xyz"
+	redacted := redactString(rawTrace)
+
+	if !strings.Contains(redacted, "/app/src/services/authorizationService.ts:42:15") {
+		t.Errorf("stack trace filename/line number was corrupted: %s", redacted)
+	}
+	if !strings.Contains(redacted, "checkAuth()") {
+		t.Errorf("function name was corrupted: %s", redacted)
+	}
+	if strings.Contains(redacted, "supersecret123") {
+		t.Errorf("password was not redacted: %s", redacted)
+	}
+	if strings.Contains(redacted, "secret_token_xyz") {
+		t.Errorf("bearer token was not redacted: %s", redacted)
+	}
+	if !strings.Contains(redacted, "password=[REDACTED]") {
+		t.Errorf("expected password=[REDACTED] in %s", redacted)
+	}
+	if !strings.Contains(redacted, "Bearer [REDACTED]") {
+		t.Errorf("expected Bearer [REDACTED] in %s", redacted)
+	}
+}
+
+func TestRedactPreservesStackTraceWithPrivateKey(t *testing.T) {
+	rawTrace := "Error in ssl.ts:18:22: failed to parse private key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0m...\n-----END RSA PRIVATE KEY-----\n    at loadCertificates (cert.ts:88:5)\n    at initServer (server.ts:12:3)"
+	redacted := redactString(rawTrace)
+
+	if !strings.Contains(redacted, "ssl.ts:18:22") {
+		t.Errorf("expected file/line to be preserved before private key, got: %s", redacted)
+	}
+	if !strings.Contains(redacted, "cert.ts:88:5") {
+		t.Errorf("expected stack trace after private key to be preserved, got: %s", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED RSA KEY]") {
+		t.Errorf("expected [REDACTED RSA KEY], got: %s", redacted)
+	}
+	if strings.Contains(redacted, "MIIEowIBAAKCAQEA0m") {
+		t.Errorf("private key content was not redacted: %s", redacted)
 	}
 }

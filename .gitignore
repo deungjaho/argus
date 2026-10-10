@@ -1,5 +1,6 @@
 # Build artifacts
 /argus
+/bin/
 *.exe
 
 # OS files

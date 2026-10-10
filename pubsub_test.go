@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -352,5 +353,95 @@ func TestEventHubCloseUnblocksCriticalPublishConcurrently(t *testing.T) {
 		go hub.unsubscribe(sub)
 
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestEventHubCriticalPublishDoesNotDeadlockWhenBufferStalls(t *testing.T) {
+	hub := newEventHub(0)
+	defer hub.close()
+
+	sub := hub.subscribe("critical", 1, true)
+	defer hub.unsubscribe(sub)
+
+	// Publish event 1 (fills the buffer of 1)
+	hub.publish(&browserCDPEnvelope{Method: "ev1"})
+
+	// Publish event 2 (stalls buffer; should offload to overflow queue and NOT hang forever)
+	done := make(chan struct{})
+	go func() {
+		hub.publish(&browserCDPEnvelope{Method: "ev2"})
+		hub.publish(&browserCDPEnvelope{Method: "ev3"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Succeeded in returning without blocking indefinitely
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("publish deadlocked when subscriber buffer stalled!")
+	}
+
+	// Drain subscriber and verify all 3 events arrive in FIFO order with 0 drops
+	var received []string
+	timeout := time.After(500 * time.Millisecond)
+	for len(received) < 3 {
+		select {
+		case ev := <-sub.ch:
+			received = append(received, ev.Method)
+		case <-timeout:
+			t.Fatalf("timed out waiting for events, received %d: %v", len(received), received)
+		}
+	}
+
+	if sub.droppedCount() != 0 {
+		t.Errorf("critical subscriber dropped %d events, want 0", sub.droppedCount())
+	}
+	expected := []string{"ev1", "ev2", "ev3"}
+	for i, m := range expected {
+		if received[i] != m {
+			t.Errorf("received[%d] = %s, want %s", i, received[i], m)
+		}
+	}
+}
+
+func TestEventHubCriticalPublishStrictFIFOOrdering(t *testing.T) {
+	hub := newEventHub(0)
+	defer hub.close()
+
+	// Small buffer of 2 to force rapid overflow queue transitions
+	sub := hub.subscribe("critical_fifo", 2, true)
+	defer hub.unsubscribe(sub)
+
+	const total = 50
+	donePublish := make(chan struct{})
+	go func() {
+		for i := 0; i < total; i++ {
+			hub.publish(&browserCDPEnvelope{Method: fmt.Sprintf("ev-%02d", i)})
+		}
+		close(donePublish)
+	}()
+
+	var received []string
+	timeout := time.After(2 * time.Second)
+	for len(received) < total {
+		select {
+		case ev := <-sub.ch:
+			received = append(received, ev.Method)
+			// Intermittent micro-pause to force draining state and overflow interleaving
+			if len(received)%5 == 0 {
+				time.Sleep(5 * time.Millisecond)
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for events, got %d of %d", len(received), total)
+		}
+	}
+
+	<-donePublish
+
+	for i := 0; i < total; i++ {
+		want := fmt.Sprintf("ev-%02d", i)
+		if received[i] != want {
+			t.Fatalf("FIFO ordering violation at index %d: got %s, want %s", i, received[i], want)
+		}
 	}
 }

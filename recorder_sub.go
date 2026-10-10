@@ -218,6 +218,11 @@ func handleNetworkRequestEvent(envelope *browserCDPEnvelope, targetID string, ep
 	// When absent, it's the initial request (hop 0) and we reset
 	// the counter for this loader.
 	redirectHopMu.Lock()
+	if len(redirectHops) > 1024 {
+		// LoaderIDs accumulate forever otherwise; chains are short-lived,
+		// so a full reset is safe.
+		redirectHops = map[string]int{}
+	}
 	hopCount := 0
 	if params.RedirectResponse != nil {
 		hopCount = redirectHops[params.LoaderID] + 1

@@ -5,8 +5,8 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 44 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 44", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 48 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 48", len(toolMetaRegistry))
 	}
 }
 
@@ -178,5 +178,10 @@ func TestSplitComma(t *testing.T) {
 	parts = splitComma("single")
 	if len(parts) != 1 || parts[0] != "single" {
 		t.Errorf("splitComma(single) = %v, want [single]", parts)
+	}
+
+	parts = splitComma(" core , diagnose , full ")
+	if len(parts) != 3 || parts[0] != "core" || parts[1] != "diagnose" || parts[2] != "full" {
+		t.Errorf("splitComma with spaces = %v, want [core diagnose full]", parts)
 	}
 }

@@ -48,8 +48,11 @@ func registerTraceTools(server *mcp.Server) {
 	type timelineInput struct {
 		Limit          int    `json:"limit,omitempty"`
 		EventType      string `json:"event_type,omitempty"`
+		Type           string `json:"type,omitempty"`
 		ActionID       string `json:"action_id,omitempty"`
 		TargetID       string `json:"target_id,omitempty"`
+		Target         string `json:"target,omitempty"`
+		TabID          string `json:"tab_id,omitempty"`
 		IncludeActions bool   `json:"include_actions,omitempty"`
 	}
 
@@ -72,9 +75,9 @@ func registerTraceTools(server *mcp.Server) {
 			totalLimit = 50
 		}
 
-		eventType := strings.TrimSpace(input.EventType)
+		eventType := resolveFirstNonEmpty(input.EventType, input.Type)
 		actionID := strings.TrimSpace(input.ActionID)
-		targetID := strings.TrimSpace(input.TargetID)
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
 
 		// Query events
 		evtFilter := EventFilter{
@@ -123,6 +126,8 @@ func registerTraceTools(server *mcp.Server) {
 	type diagnoseInput struct {
 		Limit    int    `json:"limit,omitempty"`
 		TargetID string `json:"target_id,omitempty"`
+		Target   string `json:"target,omitempty"`
+		TabID    string `json:"tab_id,omitempty"`
 	}
 
 	addTool(server, &mcp.Tool{
@@ -140,7 +145,7 @@ func registerTraceTools(server *mcp.Server) {
 		}
 
 		// Scope to target_id if provided, otherwise use current target
-		targetID := strings.TrimSpace(input.TargetID)
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
 		if targetID == "" {
 			targetID = getCurrentTargetID()
 		}
@@ -226,7 +231,53 @@ func registerTraceTools(server *mcp.Server) {
 		result["failed_actions"] = failedActions
 		result["failed_action_count"] = len(failedActions)
 
-		// 5. Recorder stats
+		// 5. Recent network issues (failed or HTTP 4xx/5xx status)
+		networkIssues := queryNetworkFromRecorder(limit, false, targetID, true)
+		if ws, wsErr := requireTargetWS(); wsErr == nil && ws != "" {
+			if conn, cErr := getConn(ws); cErr == nil {
+				for _, entry := range networkIssues {
+					if networkEntryImportant(entry) {
+						if reqID, ok := entry["id"].(string); ok && reqID != "" {
+							var bodyRes struct {
+								Body          string `json:"body"`
+								Base64Encoded bool   `json:"base64Encoded"`
+							}
+							if err := conn.call("Network.getResponseBody", map[string]any{"requestId": reqID}, &bodyRes, 200*time.Millisecond); err == nil && bodyRes.Body != "" {
+								entry["response_body"] = truncateRunes(bodyRes.Body, 500)
+							}
+						}
+					}
+				}
+			}
+		}
+		result["network_issues"] = networkIssues
+		result["network_issue_count"] = len(networkIssues)
+		result["network_requests"] = networkIssues // alias for convenience
+
+		// 6. Unified errors list (exceptions + console errors)
+		errorsList := make([]map[string]any, 0, len(exceptions)+len(consoleIssues))
+		for _, e := range exceptions {
+			errorsList = append(errorsList, map[string]any{
+				"type":      "exception",
+				"timestamp": e["timestamp"],
+				"message":   e["text"],
+				"error":     e["text"],
+			})
+		}
+		for _, c := range consoleIssues {
+			if c["level"] == "error" {
+				errorsList = append(errorsList, map[string]any{
+					"type":      "console_error",
+					"timestamp": c["timestamp"],
+					"message":   c["text"],
+					"error":     c["text"],
+				})
+			}
+		}
+		result["errors"] = errorsList
+		result["error_count"] = len(errorsList)
+
+		// 7. Recorder stats
 		stats := rec.Stats()
 		result["recorder"] = map[string]any{
 			"actions_recorded":    stats.ActionsRecorded,
@@ -237,12 +288,12 @@ func registerTraceTools(server *mcp.Server) {
 			"reconnect_gaps":      stats.ReconnectGaps,
 		}
 
-		// 6. Summary
-		issueCount := len(consoleIssues) + len(exceptions) + len(failedActions)
+		// 8. Summary
+		issueCount := len(consoleIssues) + len(exceptions) + len(failedActions) + len(networkIssues)
 		if issueCount == 0 {
 			result["summary"] = "no issues found in recent history"
 		} else {
-			result["summary"] = formatDiagnoseSummary(len(consoleIssues), len(exceptions), len(failedActions))
+			result["summary"] = formatDiagnoseSummary(len(consoleIssues), len(exceptions), len(failedActions), len(networkIssues))
 		}
 
 		return nil, result, nil
@@ -250,8 +301,14 @@ func registerTraceTools(server *mcp.Server) {
 
 	type exportTraceInput struct {
 		Path     string `json:"path,omitempty"`
+		FilePath string `json:"file_path,omitempty"`
+		File     string `json:"file,omitempty"`
+		Filename string `json:"filename,omitempty"`
+		Output   string `json:"output,omitempty"`
 		ActionID string `json:"action_id,omitempty"`
 		TargetID string `json:"target_id,omitempty"`
+		Target   string `json:"target,omitempty"`
+		TabID    string `json:"tab_id,omitempty"`
 	}
 
 	addTool(server, &mcp.Tool{
@@ -264,7 +321,7 @@ func registerTraceTools(server *mcp.Server) {
 			"Filter by action_id or target_id to export a specific subset.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input exportTraceInput) (*mcp.CallToolResult, any, error) {
 		actionID := strings.TrimSpace(input.ActionID)
-		targetID := strings.TrimSpace(input.TargetID)
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
 
 		// Gather all data
 		trace := map[string]any{
@@ -322,7 +379,7 @@ func registerTraceTools(server *mcp.Server) {
 			return nil, nil, fmt.Errorf("failed to create trace directory %s: %w", traceDir, err)
 		}
 
-		filename := strings.TrimSpace(input.Path)
+		filename := resolveInputPath(input.Path, input.FilePath, input.File, input.Filename, input.Output)
 		if filename == "" {
 			filename = fmt.Sprintf("argus-trace-%d.json", time.Now().UnixNano())
 		}
@@ -419,8 +476,15 @@ func buildTimeline(events []EventRecord, actions []ActionRecord, totalLimit int)
 		entries = append(entries, entry)
 	}
 
-	// Sort by timestamp (oldest first for timeline order)
+	// Sort by timestamp using time.Time comparison (oldest first for timeline order)
 	sort.Slice(entries, func(i, j int) bool {
+		ti := parseTimelineTime(entries[i].Timestamp)
+		tj := parseTimelineTime(entries[j].Timestamp)
+		if !ti.IsZero() && !tj.IsZero() {
+			if !ti.Equal(tj) {
+				return ti.Before(tj)
+			}
+		}
 		return entries[i].Timestamp < entries[j].Timestamp
 	})
 
@@ -531,7 +595,7 @@ func linkExactCDPIDs(entries []timelineEntry) {
 	}
 }
 
-func formatDiagnoseSummary(consoleIssues, exceptions, failedActions int) string {
+func formatDiagnoseSummary(consoleIssues, exceptions, failedActions, networkIssues int) string {
 	parts := []string{}
 	if consoleIssues > 0 {
 		parts = append(parts, formatDiagnoseCount(consoleIssues, "console issue"))
@@ -541,6 +605,9 @@ func formatDiagnoseSummary(consoleIssues, exceptions, failedActions int) string 
 	}
 	if failedActions > 0 {
 		parts = append(parts, formatDiagnoseCount(failedActions, "failed action"))
+	}
+	if networkIssues > 0 {
+		parts = append(parts, formatDiagnoseCount(networkIssues, "network issue"))
 	}
 	return "found " + joinStrings(parts, ", ")
 }
@@ -586,4 +653,14 @@ func getTraceDir() string {
 		return filepath.Join(os.TempDir(), "argus-traces")
 	}
 	return filepath.Join(home, ".local", "share", "argus", "traces")
+}
+
+func parseTimelineTime(s string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }

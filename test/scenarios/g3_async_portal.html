@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G3: Async Portal Floating Layer</title>
+  <style>
+    .portal-dropdown {
+      position: absolute;
+      top: 60px;
+      left: 20px;
+      background: #ffffff;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 9999;
+    }
+    .dropdown-item {
+      padding: 6px 12px;
+      cursor: pointer;
+      border: none;
+      background: #f0f0f0;
+      text-align: left;
+    }
+    .dropdown-item:hover {
+      background: #e0e0e0;
+    }
+  </style>
+</head>
+<body>
+  <h2>Async Portal Test</h2>
+  <button id="menu-btn">Actions Menu</button>
+  <div id="selection-status">none</div>
+
+  <script>
+    const btn = document.getElementById('menu-btn');
+    btn.addEventListener('click', () => {
+      // Simulate modern UI async portal (100ms microtask/timer delay)
+      setTimeout(() => {
+        if (document.getElementById('dropdown-portal')) return;
+
+        const portal = document.createElement('div');
+        portal.id = 'dropdown-portal';
+        portal.className = 'portal-dropdown';
+
+        const optEdit = document.createElement('button');
+        optEdit.id = 'opt-edit';
+        optEdit.className = 'dropdown-item';
+        optEdit.textContent = 'Edit Profile';
+        optEdit.onclick = () => {
+          document.getElementById('selection-status').textContent = 'profile_edited';
+          portal.remove();
+        };
+
+        const optDelete = document.createElement('button');
+        optDelete.id = 'opt-delete';
+        optDelete.className = 'dropdown-item';
+        optDelete.textContent = 'Delete Account';
+        optDelete.onclick = () => {
+          document.getElementById('selection-status').textContent = 'account_deleted';
+          portal.remove();
+        };
+
+        portal.appendChild(optEdit);
+        portal.appendChild(optDelete);
+        document.body.appendChild(portal);
+      }, 100);
+    });
+  </script>
+</body>
+</html>

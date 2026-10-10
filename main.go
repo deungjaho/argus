@@ -42,6 +42,7 @@ func main() {
 		attach   bool
 		profile  string
 		debug    bool
+		focus    bool
 		toolsets string
 	)
 	fs.StringVar(&url, "url", "", "initial target URL (also set ARGUS_URL env)")
@@ -49,6 +50,7 @@ func main() {
 	fs.BoolVar(&attach, "attach", false, "attach to existing CDP endpoint instead of launching Chrome (also set ARGUS_ATTACH env)")
 	fs.StringVar(&profile, "profile", "", "profile mode: isolated (default) or user (use real Chrome profile with cookies/tokens)")
 	fs.BoolVar(&debug, "debug", false, "enable debug logging to stderr")
+	fs.BoolVar(&focus, "focus", false, "bring Chrome to the foreground: activate windows and open tabs in front (default: background only, never covers your screen; also set ARGUS_FOCUS env)")
 	fs.StringVar(&toolsets, "toolsets", "", "comma-separated capability sets to expose on top of the always-on default loop (default,core,diagnose,debug,full). 'full' exposes everything including deprecated aliases + escape hatches. Also set ARGUS_TOOLSETS env.")
 	var doctor bool
 	fs.BoolVar(&doctor, "doctor", false, "run diagnostic checks and exit")
@@ -74,6 +76,10 @@ func main() {
 	if profile == "user" {
 		setProfile("user")
 	}
+	if !focus {
+		focus = envBoolDefault(false, "ARGUS_FOCUS")
+	}
+	setFocus(focus)
 	// Toolset filtering: determines which tools are exposed to the MCP client.
 	// The "default" loop (configure/status/snapshot/click/fill/navigate/eval/
 	// screenshot/find/get_element/wait_for/exists/tool_summary) is always on —
@@ -137,7 +143,7 @@ func main() {
 	}
 	startPpidWatcher(doShutdown)
 
-	logInfo("argus %s starting (cdp port=%d, attach=%v, profile=%s)", argusVersion, cdpPort, attach, profile)
+	logInfo("argus %s starting (cdp port=%d, attach=%v, profile=%s, focus=%v)", argusVersion, cdpPort, attach, profile, focus)
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		logError("server error: %v", err)
 		// Server error (includes stdin EOF) — still clean up
@@ -170,6 +176,14 @@ func addTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHa
 // noInput is a zero-struct for tools that take no parameters.
 type noInput struct{}
 
+// tabScopeInput absorbs optional target, tab_id, or dummy parameters for parameterless tools.
+type tabScopeInput struct {
+	Target   string `json:"target,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+	TabID    string `json:"tab_id,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+}
+
 func registerAllTools(server *mcp.Server) {
 	registerConfigTools(server)
 	registerNavigationTools(server)
@@ -188,6 +202,8 @@ func registerAllTools(server *mcp.Server) {
 	registerMiscTools(server)
 	registerTraceTools(server)
 	registerDiscoveryTools(server)
+	registerDiffTools(server)
+	registerRecordTools(server)
 }
 
 // runDoctor runs diagnostic checks and exits.

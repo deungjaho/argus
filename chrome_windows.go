@@ -68,6 +68,10 @@ func launchChrome() error {
 		"--no-default-browser-check",
 	}
 	args = append(args, chromeHeadlessArgs()...)
+	if !wantFocus() {
+		// Keep the window minimized unless --focus requested foreground.
+		args = append(args, "--start-minimized")
+	}
 	args = append(args, "about:blank")
 	cmd := exec.Command(binary, args...)
 	cmd.Stdin = nil

@@ -4,81 +4,156 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type screenshotInput struct {
-	Grid      bool `json:"grid,omitempty"`
-	MajorStep int  `json:"major_step,omitempty"`
-	MinorStep int  `json:"minor_step,omitempty"`
-	MaxSizeKB int  `json:"max_size_kb,omitempty"` // bound screenshot file size (default 500, max 2000)
+	Path          string `json:"path,omitempty"`
+	FilePath      string `json:"file_path,omitempty"`
+	File          string `json:"file,omitempty"`
+	Filename      string `json:"filename,omitempty"`
+	Output        string `json:"output,omitempty"`
+	Format        string `json:"format,omitempty"`
+	Type          string `json:"type,omitempty"`
+	Quality       int    `json:"quality,omitempty"`
+	FullPage      bool   `json:"full_page,omitempty"`
+	FullPageCamel bool   `json:"fullPage,omitempty"`
+	MaxWidth      int    `json:"max_width,omitempty"`
+	Grid          bool   `json:"grid,omitempty"`
+	MajorStep     int    `json:"major_step,omitempty"`
+	MinorStep     int    `json:"minor_step,omitempty"`
+	MaxSizeKB     int    `json:"max_size_kb,omitempty"` // bound screenshot file size (default 500, max 2000)
+	Target        string `json:"target,omitempty"`
+	TargetID      string `json:"target_id,omitempty"`
+	TabID         string `json:"tab_id,omitempty"`
 }
 
 type screenshotFullPageInput struct {
-	MaxWidth int `json:"max_width,omitempty"`
+	Path          string `json:"path,omitempty"`
+	FilePath      string `json:"file_path,omitempty"`
+	File          string `json:"file,omitempty"`
+	Filename      string `json:"filename,omitempty"`
+	Output        string `json:"output,omitempty"`
+	Format        string `json:"format,omitempty"`
+	Type          string `json:"type,omitempty"`
+	Quality       int    `json:"quality,omitempty"`
+	FullPage      bool   `json:"full_page,omitempty"`
+	FullPageCamel bool   `json:"fullPage,omitempty"`
+	MaxWidth      int    `json:"max_width,omitempty"`
+	Grid          bool   `json:"grid,omitempty"`
+	MajorStep     int    `json:"major_step,omitempty"`
+	MinorStep     int    `json:"minor_step,omitempty"`
+	MaxSizeKB     int    `json:"max_size_kb,omitempty"`
+	Target        string `json:"target,omitempty"`
+	TargetID      string `json:"target_id,omitempty"`
+	TabID         string `json:"tab_id,omitempty"`
+}
+
+func resolveInputPath(paths ...string) string {
+	for _, p := range paths {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func resolveInputFormat(format, typ string) string {
+	if strings.TrimSpace(format) != "" {
+		return strings.TrimSpace(format)
+	}
+	return strings.TrimSpace(typ)
 }
 
 func registerScreenshotTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "screenshot",
-		Description: "Capture a compressed JPEG screenshot of the current viewport. Returns image + metadata (viewport dimensions, image dimensions, coordinate system). Use viewport x/y with click. Set grid=true to overlay a coordinate grid (use those x/y values with click or inspect_point). max_size_kb bounds the screenshot file (default 500, max 2000); if exceeded, truncation metadata is returned instead of the image.",
+		Description: "Capture a compressed JPEG screenshot of the current viewport. Returns image + metadata (viewport dimensions, image dimensions, coordinate system). Use viewport x/y with click. Set grid=true to overlay a coordinate grid (use those x/y values with click or inspect_point). max_size_kb bounds the screenshot file (default 500, max 2000); if exceeded, truncation metadata is returned instead of the image. Optional path saves the screenshot to a file.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, any, error) {
-		return screenshotResult(input.Grid, input.MajorStep, input.MinorStep, input.MaxSizeKB)
+		return screenshotResult(input)
 	})
 
 	addTool(server, &mcp.Tool{
 		Name:        "screenshot_full_page",
-		Description: "Capture a full-page screenshot (including content below the fold). Returns image + metadata.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
-		ws, err := requireTargetWS()
+		Description: "Capture a full-page screenshot (including content below the fold). Returns image + metadata. Optional path saves the screenshot to a file.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotFullPageInput) (*mcp.CallToolResult, any, error) {
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
+		target, err := requireTarget()
 		if err != nil {
 			return nil, nil, err
 		}
+		ws := target.WebSocketDebuggerURL
 		pngData, err := cdpCaptureScreenshot(ws, true)
 		if err != nil {
 			return nil, nil, err
 		}
-		path, err := defaultScreenshotPath()
+		reqPath := resolveInputPath(input.Path, input.FilePath, input.File, input.Filename, input.Output)
+		reqFormat := resolveInputFormat(input.Format, input.Type)
+		path, err := resolveScreenshotPath(reqPath, reqFormat)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := writeCompressedScreenshot(pngData, path); err != nil {
-			_ = os.Remove(path)
-			return nil, nil, err
-		}
-		jpegData, err := os.ReadFile(path)
+		imgData, mimeType, err := writeScreenshot(pngData, path, reqFormat, input.Quality, input.MaxWidth, true)
 		if err != nil {
-			_ = os.Remove(path)
 			return nil, nil, err
 		}
-		imageWidth, imageHeight, _ := imageDimensions(jpegData)
+		imageWidth, imageHeight, _ := imageDimensions(imgData)
 		meta := map[string]any{
+			"url":       target.URL,
+			"title":     target.Title,
 			"path":      path,
-			"bytes":     len(jpegData),
-			"mime_type": "image/jpeg",
+			"bytes":     len(imgData),
+			"mime_type": mimeType,
 			"full_page": true,
 			"image": map[string]any{
 				"width":  imageWidth,
 				"height": imageHeight,
 			},
 		}
+		if input.MaxSizeKB > 0 {
+			maxSizeKB := input.MaxSizeKB
+			if maxSizeKB > 2000 {
+				maxSizeKB = 2000
+			}
+			maxBytes := maxSizeKB * 1024
+			if len(imgData) > maxBytes {
+				attachTruncation(meta, TruncationMeta{
+					Truncated:  true,
+					TotalCount: len(imgData),
+					ShownCount: 0,
+					Reason:     fmt.Sprintf("screenshot %d bytes exceeds max_size_kb=%d (%d bytes); image omitted from response", len(imgData), maxSizeKB, maxBytes),
+				})
+				meta["max_size_kb"] = maxSizeKB
+				metaText, _ := json.MarshalIndent(meta, "", "  ")
+				return &mcp.CallToolResult{Content: []mcp.Content{
+					&mcp.TextContent{Text: string(metaText)},
+				}}, nil, nil
+			}
+		}
 		metaText, _ := json.MarshalIndent(meta, "", "  ")
 		return &mcp.CallToolResult{Content: []mcp.Content{
 			&mcp.TextContent{Text: string(metaText)},
-			&mcp.ImageContent{Data: jpegData, MIMEType: "image/jpeg"},
+			&mcp.ImageContent{Data: imgData, MIMEType: mimeType},
 		}}, nil, nil
 	})
 }
 
-func screenshotResult(grid bool, majorStep, minorStep, maxSizeKB int) (*mcp.CallToolResult, any, error) {
+func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
+	if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+		setCurrentTargetID(targetID)
+	}
 	target, err := requireTarget()
 	if err != nil {
 		return nil, nil, err
 	}
 	ws := target.WebSocketDebuggerURL
-	if grid {
+	if input.Grid {
+		majorStep := input.MajorStep
+		minorStep := input.MinorStep
 		if majorStep <= 0 {
 			majorStep = 100
 		}
@@ -92,40 +167,42 @@ func screenshotResult(grid bool, majorStep, minorStep, maxSizeKB int) (*mcp.Call
 			_, _ = cdpEvaluate(ws, `document.getElementById('__argus_coordinate_overlay__')?.remove(); true`, true)
 		}()
 	}
+	fullPage := input.FullPage || input.FullPageCamel
 	viewport, _ := viewportMetrics(ws)
-	pngData, err := cdpCaptureScreenshot(ws, false)
+	pngData, err := cdpCaptureScreenshot(ws, fullPage)
 	if err != nil {
 		return nil, nil, err
 	}
-	path, err := defaultScreenshotPath()
+	reqPath := resolveInputPath(input.Path, input.FilePath, input.File, input.Filename, input.Output)
+	reqFormat := resolveInputFormat(input.Format, input.Type)
+	path, err := resolveScreenshotPath(reqPath, reqFormat)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := writeCompressedScreenshot(pngData, path); err != nil {
-		_ = os.Remove(path)
-		return nil, nil, err
-	}
-	jpegData, err := os.ReadFile(path)
+	imgData, mimeType, err := writeScreenshot(pngData, path, reqFormat, input.Quality, input.MaxWidth, fullPage)
 	if err != nil {
-		_ = os.Remove(path)
 		return nil, nil, err
 	}
-	// Enforce the max_size_kb bound. Default 500 KB, hard max 2000 KB.
-	if maxSizeKB <= 0 {
-		maxSizeKB = 500
-	}
-	if maxSizeKB > 2000 {
+	maxSizeKB := input.MaxSizeKB
+	if !fullPage {
+		// Enforce the max_size_kb bound. Default 500 KB, hard max 2000 KB.
+		if maxSizeKB <= 0 {
+			maxSizeKB = 500
+		}
+		if maxSizeKB > 2000 {
+			maxSizeKB = 2000
+		}
+	} else if maxSizeKB > 2000 {
 		maxSizeKB = 2000
 	}
-	maxBytes := maxSizeKB * 1024
-	imageWidth, imageHeight, _ := imageDimensions(jpegData)
+	imageWidth, imageHeight, _ := imageDimensions(imgData)
 	meta := map[string]any{
 		"url":       target.URL,
 		"title":     target.Title,
 		"path":      path,
-		"bytes":     len(jpegData),
-		"mime_type": "image/jpeg",
-		"grid":      grid,
+		"bytes":     len(imgData),
+		"mime_type": mimeType,
+		"grid":      input.Grid,
 		"image": map[string]any{
 			"width":  imageWidth,
 			"height": imageHeight,
@@ -138,10 +215,21 @@ func screenshotResult(grid bool, majorStep, minorStep, maxSizeKB int) (*mcp.Call
 			"click":  "Pass x/y directly to click. If using image pixels from a resized screenshot, pass image_x/image_y with screenshot_path.",
 		},
 	}
+	if input.FullPage {
+		meta["full_page"] = true
+	}
 	if scale := imageToViewportScale(viewport, imageWidth, imageHeight); scale != nil {
 		meta["image_to_viewport"] = scale
 	}
-	if grid {
+	if input.Grid {
+		majorStep := input.MajorStep
+		minorStep := input.MinorStep
+		if majorStep <= 0 {
+			majorStep = 100
+		}
+		if minorStep <= 0 {
+			minorStep = 25
+		}
 		meta["grid_steps"] = map[string]any{"major": majorStep, "minor": minorStep}
 	}
 
@@ -149,24 +237,27 @@ func screenshotResult(grid bool, majorStep, minorStep, maxSizeKB int) (*mcp.Call
 	// instead of the image payload. The file is kept on disk so the agent
 	// can retrieve it via the path if needed, but the image is not embedded
 	// in the MCP response to protect the context window.
-	if len(jpegData) > maxBytes {
-		attachTruncation(meta, TruncationMeta{
-			Truncated:  true,
-			TotalCount: len(jpegData),
-			ShownCount: 0,
-			Reason:     fmt.Sprintf("screenshot %d bytes exceeds max_size_kb=%d (%d bytes); image omitted from response", len(jpegData), maxSizeKB, maxBytes),
-		})
-		meta["max_size_kb"] = maxSizeKB
-		metaText, _ := json.MarshalIndent(meta, "", "  ")
-		return &mcp.CallToolResult{Content: []mcp.Content{
-			&mcp.TextContent{Text: string(metaText)},
-		}}, nil, nil
+	if maxSizeKB > 0 {
+		maxBytes := maxSizeKB * 1024
+		if len(imgData) > maxBytes {
+			attachTruncation(meta, TruncationMeta{
+				Truncated:  true,
+				TotalCount: len(imgData),
+				ShownCount: 0,
+				Reason:     fmt.Sprintf("screenshot %d bytes exceeds max_size_kb=%d (%d bytes); image omitted from response", len(imgData), maxSizeKB, maxBytes),
+			})
+			meta["max_size_kb"] = maxSizeKB
+			metaText, _ := json.MarshalIndent(meta, "", "  ")
+			return &mcp.CallToolResult{Content: []mcp.Content{
+				&mcp.TextContent{Text: string(metaText)},
+			}}, nil, nil
+		}
 	}
 
 	metaText, _ := json.MarshalIndent(meta, "", "  ")
 	return &mcp.CallToolResult{Content: []mcp.Content{
 		&mcp.TextContent{Text: string(metaText)},
-		&mcp.ImageContent{Data: jpegData, MIMEType: "image/jpeg"},
+		&mcp.ImageContent{Data: imgData, MIMEType: mimeType},
 	}}, nil, nil
 }
 

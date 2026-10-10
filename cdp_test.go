@@ -312,7 +312,7 @@ func TestInterceptRuleMatching(t *testing.T) {
 // --- Auto-wait expression tests ---
 
 func TestElementStateExpression(t *testing.T) {
-	expr := elementStateExpression("#submit-btn", "")
+	expr := elementStateExpression("#submit-btn", "", "")
 	if !strings.Contains(expr, "#submit-btn") {
 		t.Error("expression should contain the selector")
 	}
@@ -331,7 +331,7 @@ func TestElementStateExpression(t *testing.T) {
 }
 
 func TestElementStateExpressionWithText(t *testing.T) {
-	expr := elementStateExpression("", "Submit")
+	expr := elementStateExpression("", "Submit", "")
 	if !strings.Contains(expr, "Submit") {
 		t.Error("expression should contain the text")
 	}

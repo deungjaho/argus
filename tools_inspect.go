@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,6 +16,11 @@ func registerInspectTools(server *mcp.Server) {
 		Selector  string `json:"selector,omitempty"`
 		Text      string `json:"text,omitempty"`
 		TimeoutMs int    `json:"timeout_ms,omitempty"`
+		Timeout   int    `json:"timeout,omitempty"`
+		Target    string `json:"target,omitempty"`
+		CSS       string `json:"css,omitempty"`
+		XPath     string `json:"xpath,omitempty"`
+		Query     string `json:"query,omitempty"`
 	}
 
 	addTool(server, &mcp.Tool{
@@ -27,12 +31,13 @@ func registerInspectTools(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, err
 		}
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-		text := strings.TrimSpace(input.Text)
+		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
+		text := resolveFirstNonEmpty(input.Text, input.Query)
 		if selector == "" && text == "" {
 			return nil, nil, fmt.Errorf("exists requires ref, selector, or text")
 		}
-		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+		timeout := time.Duration(timeoutMs) * time.Millisecond
 		if timeout > 0 {
 			deadline := time.Now().Add(timeout)
 			for time.Now().Before(deadline) {
@@ -52,25 +57,31 @@ func checkElementExists(ws, selector, text string) (map[string]any, error) {
 	value, err := cdpEvaluate(ws, fmt.Sprintf(`(() => {
 const selector = %s;
 const text = %s;
+const visible = (el) => {
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+};
 let el = null;
 let count = 0;
 if (selector) {
-  const all = document.querySelectorAll(selector);
-  count = all.length;
-  el = all[0] || null;
+  try {
+    const all = document.querySelectorAll(selector);
+    count = all.length;
+    el = all[0] || null;
+  } catch (e) {
+    el = document.getElementById(selector) ||
+         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+  }
 }
-if (!el && text) {
-  const needle = text.toLowerCase();
-  const candidates = Array.from(document.querySelectorAll('*'));
-  el = candidates.find(node => ((node.innerText || '') + ' ' + (node.getAttribute('aria-label') || '')).toLowerCase().includes(needle));
-  count = el ? 1 : 0;
-}
+`+rankedTextMatchJS+`
 if (!el) return {exists: false, visible: false, enabled: false, count: 0};
-const style = getComputedStyle(el);
-const rect = el.getBoundingClientRect();
-const visible = style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+if (count === 0) count = 1;
+const vis = visible(el);
 const enabled = !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-return {exists: true, visible, enabled, count, tag: el.localName, text: (el.innerText || '').trim().slice(0, 100)};
+return {exists: true, visible: vis, enabled, count, tag: el.localName, text: (el.innerText || '').trim().slice(0, 100)};
 })()`, jsString(selector), jsString(text)), true)
 	if err != nil {
 		return map[string]any{"exists": false, "visible": false, "enabled": false, "count": 0, "error": err.Error()}, nil

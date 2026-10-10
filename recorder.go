@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -232,6 +233,111 @@ func (r *recorder) attributeActionLocked(t time.Time, targetID string) ActionID 
 	return best
 }
 
+const maxEvidencePerKind = 5
+
+// EvidenceSince collects agent-actionable events observed on targetID
+// since t: console errors/warnings, exceptions, failed or HTTP-error
+// network responses, and top-level URL navigations. Each category is
+// bounded to maxEvidencePerKind items; counts report totals seen.
+// Returns nil when nothing noteworthy happened.
+func (r *recorder) EvidenceSince(targetID string, since time.Time) map[string]any {
+	events := r.QueryEvents(EventFilter{targetID: targetID, since: since, limit: 400})
+
+	// Failed network events carry no URL; join to the request-phase
+	// event of the same requestId recorded in the same window.
+	reqURL, reqMethod := map[string]string{}, map[string]string{}
+	for _, e := range events {
+		if e.Type != "network" {
+			continue
+		}
+		if ev, ok := e.Data.(NetworkEvidence); ok && ev.Phase == "request" {
+			reqURL[ev.RequestID] = ev.URL
+			reqMethod[ev.RequestID] = ev.Method
+		}
+	}
+
+	consoleItems, netItems, navItems := []map[string]any{}, []map[string]any{}, []map[string]any{}
+	consoleTotal, netTotal, navTotal := 0, 0, 0
+	for _, e := range events {
+		switch e.Type {
+		case "console", "exception", "log":
+			m, ok := e.Data.(map[string]any)
+			if !ok {
+				continue
+			}
+			level, _ := m["level"].(string)
+			if e.Type == "exception" {
+				level = "error"
+			}
+			if level != "error" && level != "warning" {
+				continue
+			}
+			consoleTotal++
+			if len(consoleItems) < maxEvidencePerKind {
+				consoleItems = append(consoleItems, map[string]any{
+					"level": level,
+					"text":  truncateUTF8Safe(fmt.Sprintf("%v", m["text"]), 300),
+				})
+			}
+		case "network":
+			ev, ok := e.Data.(NetworkEvidence)
+			if !ok {
+				continue // truncated payloads
+			}
+			failed := ev.Phase == "failed" && !ev.Canceled
+			httpErr := ev.Phase == "response" && ev.Status >= 400
+			if !failed && !httpErr {
+				continue
+			}
+			netTotal++
+			if len(netItems) < maxEvidencePerKind {
+				item := map[string]any{"url": firstNonEmpty(ev.URL, reqURL[ev.RequestID])}
+				if m := firstNonEmpty(ev.Method, reqMethod[ev.RequestID]); m != "" {
+					item["method"] = m
+				}
+				if ev.Status != 0 {
+					item["status"] = ev.Status
+				}
+				if ev.ErrorText != "" {
+					item["error"] = ev.ErrorText
+				}
+				netItems = append(netItems, item)
+			}
+		case "navigation":
+			ev, ok := e.Data.(NavigationEvidence)
+			if !ok {
+				continue
+			}
+			// Only top-level URL changes matter; skip lifecycle/frame
+			// plumbing and iframe navigations.
+			if ev.URL == "" || ev.ParentFrameID != "" {
+				continue
+			}
+			if ev.Phase != "frameNavigated" && ev.Phase != "navigatedWithinDocument" {
+				continue
+			}
+			navTotal++
+			if len(navItems) < maxEvidencePerKind {
+				navItems = append(navItems, map[string]any{"url": ev.URL, "type": ev.NavigationType})
+			}
+		}
+	}
+	if consoleTotal == 0 && netTotal == 0 && navTotal == 0 {
+		return nil
+	}
+	evidence := map[string]any{}
+	if consoleTotal > 0 {
+		evidence["console"] = map[string]any{"count": consoleTotal, "items": consoleItems}
+	}
+	if netTotal > 0 {
+		evidence["network_failures"] = map[string]any{"count": netTotal, "items": netItems}
+	}
+	if navTotal > 0 {
+		evidence["navigations"] = map[string]any{"count": navTotal, "items": navItems}
+	}
+	return evidence
+}
+
 // Stats returns recorder statistics.
 func (r *recorder) Stats() RecorderStats {
 	r.mu.Lock()
@@ -376,9 +482,10 @@ func (f ActionFilter) match(a ActionRecord) bool {
 }
 
 type EventFilter struct {
-	eventType string // filter by event type, empty = all
-	targetID  string // filter by target, empty = all
-	actionID  string // filter by action, empty = all
+	eventType string    // filter by event type, empty = all
+	targetID  string    // filter by target, empty = all
+	actionID  string    // filter by action, empty = all
+	since     time.Time // filter to events at/after this time, zero = all
 	limit     int
 }
 
@@ -390,6 +497,9 @@ func (f EventFilter) match(e EventRecord) bool {
 		return false
 	}
 	if f.actionID != "" && string(e.ActionID) != f.actionID {
+		return false
+	}
+	if !f.since.IsZero() && e.Timestamp.Before(f.since) {
 		return false
 	}
 	return true

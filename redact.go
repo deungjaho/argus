@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -13,66 +14,69 @@ import (
 // - Exception messages that expose internal state
 //
 // Redaction strategy:
-//   - Scan string values in event data for sensitive patterns
-//   - Replace matched portions with [REDACTED]
-//   - Patterns: JWT tokens, API keys, passwords, bearer tokens,
-//     authorization headers, cookie values
-//
-// Redaction is applied in timeline, diagnose, and export_trace outputs.
-// The raw recorder stores unredacted data (for debugging), but all
-// MCP-facing outputs are redacted.
+//   - Target sensitive tokens (JWT, Bearer, passwords, secrets, API keys)
+//   - Mask only the sensitive value while preserving surrounding error text,
+//     stack traces, filenames, and line numbers.
 
-// sensitivePatterns are regex-like patterns to detect sensitive data.
-// We use simple string matching for performance and predictability.
-var sensitivePatterns = []sensitivePattern{
-	// JWT tokens: eyJ...three parts separated by dots
-	{contains: "eyJ", minLen: 40, replaceWith: "[REDACTED JWT]"},
-	// Bearer tokens
-	{prefix: "Bearer ", replaceWith: "Bearer [REDACTED]"},
-	// Authorization headers
-	{contains: "authorization", caseInsensitive: true, replaceWith: "[REDACTED AUTH]"},
-	// Password fields
-	{prefix: "password=", replaceWith: "password=[REDACTED]"},
-	{contains: "\"password\"", caseInsensitive: true, replaceWith: "\"password\":\"[REDACTED]\""},
-	// API key patterns
-	{prefix: "api_key=", replaceWith: "api_key=[REDACTED]"},
-	{prefix: "apikey=", replaceWith: "apikey=[REDACTED]"},
-	{contains: "secret=", caseInsensitive: true, replaceWith: "secret=[REDACTED]"},
-	// Cookie values (long base64-like strings after "cookie:")
-	{prefix: "cookie:", replaceWith: "cookie:[REDACTED]"},
-	// Private keys
-	{contains: "BEGIN PRIVATE KEY", replaceWith: "[REDACTED PRIVATE KEY]"},
-	{contains: "BEGIN RSA PRIVATE KEY", replaceWith: "[REDACTED RSA KEY]"},
-}
+var (
+	reRSAKey        = regexp.MustCompile(`(?s)-----BEGIN RSA PRIVATE KEY-----[\s\S]*?(?:-----END RSA PRIVATE KEY-----|$)`)
+	rePrivateKey    = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`)
+	reJWT           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\b`)
+	reBearer        = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*`)
+	reAuthHeader    = regexp.MustCompile(`(?i)(authorization:\s*)([^\r\n,]+)`)
+	rePasswordQuery = regexp.MustCompile(`(?i)(password=)[^&\s;"]+`)
+	rePasswordJSON  = regexp.MustCompile(`(?i)("password"\s*:\s*)"[^"]*"`)
+	reAPIKey        = regexp.MustCompile(`(?i)(api[_-]?key=)[^&\s;"]+`)
+	reSecret        = regexp.MustCompile(`(?i)(secret=)[^&\s;"]+`)
+	reCookie        = regexp.MustCompile(`(?i)(cookie:\s*)[^\r\n]+`)
+)
 
-type sensitivePattern struct {
-	contains        string
-	prefix          string
-	minLen          int
-	caseInsensitive bool
-	replaceWith     string
-}
-
-// redactString checks a string for sensitive patterns and replaces them.
+// redactString masks sensitive credentials in a string while preserving
+// surrounding context, error messages, filenames, and stack traces.
 func redactString(s string) string {
-	for _, p := range sensitivePatterns {
-		if p.minLen > 0 && len(s) < p.minLen {
-			continue
-		}
-		if p.prefix != "" && strings.HasPrefix(s, p.prefix) {
-			return p.replaceWith
-		}
-		if p.contains != "" {
-			haystack := s
-			needle := p.contains
-			if p.caseInsensitive {
-				haystack = strings.ToLower(s)
-				needle = strings.ToLower(p.contains)
+	if reRSAKey.MatchString(s) {
+		s = reRSAKey.ReplaceAllString(s, "[REDACTED RSA KEY]")
+	}
+	if rePrivateKey.MatchString(s) {
+		s = rePrivateKey.ReplaceAllString(s, "[REDACTED PRIVATE KEY]")
+	}
+	if reJWT.MatchString(s) {
+		s = reJWT.ReplaceAllString(s, "[REDACTED JWT]")
+	}
+	if reAuthHeader.MatchString(s) {
+		s = reAuthHeader.ReplaceAllStringFunc(s, func(m string) string {
+			sub := reAuthHeader.FindStringSubmatch(m)
+			if len(sub) < 3 {
+				return m
 			}
-			if strings.Contains(haystack, needle) {
-				return p.replaceWith
+			prefix := sub[1]
+			val := strings.TrimSpace(sub[2])
+			if strings.HasPrefix(strings.ToLower(val), "bearer ") {
+				return prefix + "Bearer [REDACTED]"
 			}
-		}
+			if strings.HasPrefix(strings.ToLower(val), "basic ") {
+				return prefix + "Basic [REDACTED]"
+			}
+			return prefix + "[REDACTED]"
+		})
+	}
+	if reBearer.MatchString(s) {
+		s = reBearer.ReplaceAllString(s, "Bearer [REDACTED]")
+	}
+	if rePasswordQuery.MatchString(s) {
+		s = rePasswordQuery.ReplaceAllString(s, "${1}[REDACTED]")
+	}
+	if rePasswordJSON.MatchString(s) {
+		s = rePasswordJSON.ReplaceAllString(s, "${1}\"[REDACTED]\"")
+	}
+	if reAPIKey.MatchString(s) {
+		s = reAPIKey.ReplaceAllString(s, "${1}[REDACTED]")
+	}
+	if reSecret.MatchString(s) {
+		s = reSecret.ReplaceAllString(s, "${1}[REDACTED]")
+	}
+	if reCookie.MatchString(s) {
+		s = reCookie.ReplaceAllString(s, "${1}[REDACTED]")
 	}
 	return s
 }

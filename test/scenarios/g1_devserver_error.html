@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G1: DevServer Error Diagnosis</title>
+</head>
+<body>
+  <h1>DevServer Runtime Error Test</h1>
+  <div id="status">Loading application...</div>
+  <div id="error-display"></div>
+
+  <script>
+    // Trigger mock network failure (500)
+    fetch('/api/v1/user-profile')
+      .then(res => {
+        if (!res.ok) {
+          document.getElementById('status').textContent = 'API Error: HTTP ' + res.status;
+        }
+      })
+      .catch(err => {
+        console.error("Network fetch failed:", err);
+      });
+
+    // Trigger uncaught component JS error with file and line info
+    setTimeout(() => {
+      const err = new TypeError("Cannot read properties of undefined (reading 'userName') at UserProfile.tsx:42:15");
+      console.error(err.stack || err.message);
+      document.getElementById('error-display').textContent = err.message;
+      throw err;
+    }, 10);
+  </script>
+</body>
+</html>

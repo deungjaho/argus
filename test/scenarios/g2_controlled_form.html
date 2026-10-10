@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G2: Controlled Form Submission</title>
+  <style>
+    .error { color: red; }
+    .success { color: green; }
+  </style>
+</head>
+<body>
+  <h2>React Hook Form Controlled Login</h2>
+  <form id="login-form">
+    <div>
+      <label for="username">Username:</label>
+      <input type="text" id="username" name="username" placeholder="Username" autocomplete="off" />
+    </div>
+    <div>
+      <label for="password">Password:</label>
+      <input type="password" id="password" name="password" placeholder="Password" autocomplete="off" />
+    </div>
+    <button type="submit" id="submit-btn">Login</button>
+  </form>
+
+  <div id="message"></div>
+  <div id="status">idle</div>
+
+  <script>
+    // Simulate React Hook Form / React Controlled Component state tracking
+    const state = {
+      username: '',
+      password: ''
+    };
+
+    function setupControlledInput(inputEl, fieldName) {
+      // Internal React-like tracker
+      let _val = '';
+      inputEl._valueTracker = {
+        setValue: function(v) { _val = v; }
+      };
+
+      // Override property setter on element instance to detect bypass attempts
+      const nativeDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      Object.defineProperty(inputEl, 'value', {
+        get: function() {
+          return nativeDescriptor.get.call(this);
+        },
+        set: function(val) {
+          nativeDescriptor.set.call(this, val);
+          // Without events, state doesn't sync!
+        },
+        configurable: true
+      });
+
+      inputEl.addEventListener('input', function(e) {
+        state[fieldName] = e.target.value;
+      });
+      inputEl.addEventListener('change', function(e) {
+        state[fieldName] = e.target.value;
+      });
+    }
+
+    const userInput = document.getElementById('username');
+    const passInput = document.getElementById('password');
+    setupControlledInput(userInput, 'username');
+    setupControlledInput(passInput, 'password');
+
+    document.getElementById('login-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const msgEl = document.getElementById('message');
+      const statusEl = document.getElementById('status');
+
+      // Controlled state validation
+      if (!state.username || !state.password) {
+        msgEl.className = 'error';
+        msgEl.textContent = 'Validation Failed: username and password required';
+        statusEl.textContent = 'validation_error';
+        return;
+      }
+
+      msgEl.className = 'success';
+      msgEl.textContent = 'Login Successful: Welcome ' + state.username;
+      statusEl.textContent = 'dashboard';
+    });
+  </script>
+</body>
+</html>

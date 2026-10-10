@@ -12,31 +12,38 @@ type getElementInput struct {
 	Ref      string `json:"ref,omitempty"`
 	Selector string `json:"selector,omitempty"`
 	Include  string `json:"include,omitempty"` // html | attributes | style | bounding_box | all (default: all)
+	Target   string `json:"target,omitempty"`
+	CSS      string `json:"css,omitempty"`
+	XPath    string `json:"xpath,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Query    string `json:"query,omitempty"`
+	Fields   string `json:"fields,omitempty"`
 }
 
 func registerElementTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "get_element",
-		Description: "Get detailed info about an element: outerHTML, attributes, computed style, bounding box. Useful for debugging layout/CSS issues. include options: html, attributes, style, bounding_box, all (default).",
+		Description: "Get outerHTML, attributes, computed style, or bounding box of an element. include: html, attributes, style, bounding_box, all.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input getElementInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-		if selector == "" {
-			return nil, nil, fmt.Errorf("get_element requires ref or selector")
+		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
+		text := resolveFirstNonEmpty(input.Text, input.Query)
+		if selector == "" && text == "" {
+			return nil, nil, fmt.Errorf("get_element requires ref, selector, or text")
 		}
-		include := strings.TrimSpace(input.Include)
+		include := resolveFirstNonEmpty(input.Include, input.Fields)
 		if include == "" {
 			include = "all"
 		}
-		value, err := cdpEvaluate(ws, getElementExpression(selector, include), true)
+		value, err := cdpEvaluate(ws, getElementExpression(selector, text, include), true)
 		return nil, value, err
 	})
 }
 
-func getElementExpression(selector, include string) string {
+func getElementExpression(selector, text, include string) string {
 	includeHTML := include == "html" || include == "all"
 	includeAttrs := include == "attributes" || include == "all"
 	includeStyle := include == "style" || include == "all"
@@ -56,9 +63,21 @@ func getElementExpression(selector, include string) string {
 	}
 	return fmt.Sprintf(`(() => {
 const selector = %s;
-const el = document.querySelector(selector);
+const text = %s;
+let el = null;
+if (selector) {
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    el = document.getElementById(selector) ||
+         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+  }
+}
+`+rankedTextMatchJS+`
 if (!el) return {found: false};
 const rect = el.getBoundingClientRect();
 return Object.assign({found: true, %s});
-})()`, jsString(selector), strings.Join(parts, ""))
+})()`, jsString(selector), jsString(text), strings.Join(parts, ""))
 }

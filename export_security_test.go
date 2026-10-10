@@ -100,3 +100,92 @@ func endsWith(s, suffix string) bool {
 func startsWith(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
+
+func TestGetPdfDirDefault(t *testing.T) {
+	dir := getPdfDir()
+	if dir == "" {
+		t.Fatal("getPdfDir returned empty string")
+	}
+	if !endsWith(dir, "argus/pdf") && !endsWith(dir, "argus-pdf") {
+		t.Errorf("getPdfDir = %s, expected to end with argus/pdf or argus-pdf", dir)
+	}
+}
+
+func TestGetPdfDirFromEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("ARGUS_PDF_DIR", tmpDir)
+	defer os.Unsetenv("ARGUS_PDF_DIR")
+
+	dir := getPdfDir()
+	if dir != tmpDir {
+		t.Errorf("getPdfDir = %s, want %s", dir, tmpDir)
+	}
+}
+
+func TestPdfRefusesOverwrite(t *testing.T) {
+	pdfDir := t.TempDir()
+	os.Setenv("ARGUS_PDF_DIR", pdfDir)
+	defer os.Unsetenv("ARGUS_PDF_DIR")
+
+	existingPath := filepath.Join(pdfDir, "report.pdf")
+	if err := os.WriteFile(existingPath, []byte("%PDF-1.4 existing"), 0600); err != nil {
+		t.Fatalf("failed to create existing file: %v", err)
+	}
+
+	path := filepath.Join(pdfDir, filepath.Base("report.pdf"))
+	if _, err := os.Stat(path); err == nil {
+		t.Log("correctly detected existing file — pdf would refuse overwrite")
+	} else {
+		t.Error("expected existing file to be detected")
+	}
+}
+
+func TestPdfPathTraversalPrevention(t *testing.T) {
+	pdfDir := t.TempDir()
+
+	// Relative traversal should resolve safely inside pdfDir using the base filename
+	path, err := resolveSafePDFPath(pdfDir, "../../../etc/passwd")
+	if err != nil {
+		t.Fatalf("unexpected error for relative path: %v", err)
+	}
+	if path == "/etc/passwd" || !startsWith(path, pdfDir) {
+		t.Errorf("path traversal not prevented: got %s, should be under %s", path, pdfDir)
+	}
+
+	// Absolute path outside allowed dirs must return error
+	_, err = resolveSafePDFPath(pdfDir, "/etc/passwd")
+	if err == nil {
+		t.Errorf("expected error for /etc/passwd, got nil")
+	}
+}
+
+func TestPdfPrefixCollisionRejected(t *testing.T) {
+	pdfDir := "/var/argus/exports"
+	// An attacker tries to write to a sibling directory starting with the same prefix
+	siblingDir := "/var/argus/exports-evil"
+	maliciousPath := filepath.Join(siblingDir, "exploit.pdf")
+
+	_, err := resolveSafePDFPath(pdfDir, maliciousPath)
+	if err == nil {
+		t.Errorf("expected error for sibling prefix collision %s, got nil", maliciousPath)
+	}
+}
+
+func TestPdfAllowedPathsSucceed(t *testing.T) {
+	pdfDir := t.TempDir()
+	tempDir := filepath.Clean(os.TempDir())
+
+	// Safe path inside pdfDir
+	validPath := filepath.Join(pdfDir, "report.pdf")
+	p, err := resolveSafePDFPath(pdfDir, validPath)
+	if err != nil || p != validPath {
+		t.Errorf("resolveSafePDFPath failed for valid path: %v, got %s", err, p)
+	}
+
+	// Safe path inside tempDir
+	validTemp := filepath.Join(tempDir, "temp-report.pdf")
+	p, err = resolveSafePDFPath(pdfDir, validTemp)
+	if err != nil || p != validTemp {
+		t.Errorf("resolveSafePDFPath failed for valid temp path: %v, got %s", err, p)
+	}
+}

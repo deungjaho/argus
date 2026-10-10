@@ -2710,6 +2710,244 @@ func TestIntegrationTabChurnNoLeak(t *testing.T) {
 	}
 }
 
+// --- Optimization Tests: Real-session Friction & Token Explosion Fixes ---
+
+func TestIntegrationNavigateAttachFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	port, cleanup := setupTestChrome(t)
+	defer cleanup()
+
+	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<!DOCTYPE html><html><head><title>Attach Fallback Test</title></head><body><h1>Fallback Success</h1></body></html>")
+	})
+	defer server.Close()
+
+	// Configure attach mode with NO matching tab open for serverURL
+	attach := true
+	setConfig("", port, &attach)
+	clearCurrentTargetID()
+
+	cs := setupMCPServer(t)
+	res := callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
+	if res.IsError {
+		t.Fatalf("navigate in attach mode failed: %v", res)
+	}
+
+	data := extractToolResultJSON(t, res)
+	if data["tab_found"] != true {
+		t.Errorf("tab_found = %v, want true", data["tab_found"])
+	}
+	newTargetID := getCurrentTargetID()
+	if newTargetID == "" {
+		t.Error("currentTargetID should be set after fallback navigation")
+	}
+}
+
+func TestIntegrationEvalExpressionAlias(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	_, cleanup := setupTestChrome(t)
+	defer cleanup()
+
+	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, "<!DOCTYPE html><html><head><title>Expression Test Page</title></head><body>Hello</body></html>")
+	})
+	defer server.Close()
+
+	cs := setupMCPServer(t)
+	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
+
+	// Call eval with "expression" alias instead of "script"
+	res := callMCPTool(t, cs, "eval", map[string]any{"expression": "document.title"})
+	if res.IsError {
+		t.Fatalf("eval with expression failed: %v", res)
+	}
+
+	data := extractToolResultJSON(t, res)
+	if data["result"] != "Expression Test Page" {
+		t.Errorf("eval result = %v, want 'Expression Test Page'", data["result"])
+	}
+}
+
+func TestIntegrationSnapshotInteractiveOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	_, cleanup := setupTestChrome(t)
+	defer cleanup()
+
+	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><body>
+<p>Long body paragraph with lots of text that should be omitted.</p>
+<button id="test-btn">Click Me</button>
+<input id="test-input" placeholder="Enter text" />
+</body></html>`)
+	})
+	defer server.Close()
+
+	cs := setupMCPServer(t)
+	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
+
+	// Call snapshot with interactive_only: true
+	res := callMCPTool(t, cs, "snapshot", map[string]any{"interactive_only": true})
+	if res.IsError {
+		t.Fatalf("snapshot with interactive_only failed: %v", res)
+	}
+
+	data := extractToolResultJSON(t, res)
+	if text, ok := data["text"].(string); !ok || text != "" {
+		t.Errorf("snapshot text = %q, want empty string when interactive_only=true", text)
+	}
+
+	interactive, ok := data["interactive"].([]any)
+	if !ok || len(interactive) == 0 {
+		t.Fatalf("expected interactive elements list, got %v", data["interactive"])
+	}
+}
+
+func TestIntegrationFindPrioritizationAndCaps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	_, cleanup := setupTestChrome(t)
+	defer cleanup()
+
+	longText := strings.Repeat("ActionItem ", 20) // > 100 chars
+	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><body>
+<div class="container1"><div class="container2"><div class="container3">
+  <div>MatchTarget container text: %s</div>
+  <div>MatchTarget container 2 text</div>
+  <div>MatchTarget container 3 text</div>
+  <div>MatchTarget container 4 text</div>
+  <div>MatchTarget container 5 text</div>
+  <div>MatchTarget container 6 text</div>
+  <button id="target-btn">MatchTarget Button</button>
+</div></div></div>
+</body></html>`, longText)
+	})
+	defer server.Close()
+
+	cs := setupMCPServer(t)
+	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
+
+	res := callMCPTool(t, cs, "find", map[string]any{"text": "MatchTarget"})
+	if res.IsError {
+		t.Fatalf("find failed: %v", res)
+	}
+
+	data := extractToolResultJSON(t, res)
+	matches, ok := data["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected matches array, got %v", data["matches"])
+	}
+
+	// 1. Matches capped at max 5 items
+	if len(matches) > 5 {
+		t.Errorf("matches count = %d, want <= 5", len(matches))
+	}
+
+	// 2. Interactive element (button) prioritized to the front over container divs
+	if len(matches) > 0 {
+		firstMatch, _ := matches[0].(map[string]any)
+		if tag, _ := firstMatch["tag"].(string); tag != "button" {
+			t.Errorf("first match tag = %q, want 'button' (interactive elements should be prioritized)", tag)
+		}
+	}
+
+	// 3. Text truncated to max 100 characters
+	for i, m := range matches {
+		matchMap, _ := m.(map[string]any)
+		if text, ok := matchMap["text"].(string); ok {
+			if len([]rune(text)) > 100 {
+				t.Errorf("match[%d].text length = %d runes, want <= 100", i, len([]rune(text)))
+			}
+		}
+	}
+}
+
+func TestIntegrationFindAriaLabelAndStarvation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	_, cleanup := setupTestChrome(t)
+	defer cleanup()
+
+	// 60 container divs containing "SpecialKey" followed by a priority 1 paragraph,
+	// plus a button with icon innerText and aria-label "Dismiss Notification",
+	// plus an input with value "abc" and placeholder "Search User".
+	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		var sb strings.Builder
+		sb.WriteString("<!DOCTYPE html><html><body>")
+		for i := 0; i < 60; i++ {
+			fmt.Fprintf(&sb, "<div class=\"ancestor-%d\"><div><div>SpecialKey container %d</div></div></div>", i, i)
+		}
+		sb.WriteString("<p id=\"special-p\">SpecialKey specific paragraph text</p>")
+		sb.WriteString("<button id=\"close-btn\" aria-label=\"Dismiss Notification\">&times;</button>")
+		sb.WriteString("<input id=\"user-input\" value=\"alice\" placeholder=\"Search User\" />")
+		sb.WriteString("</body></html>")
+		fmt.Fprint(w, sb.String())
+	})
+	defer server.Close()
+
+	cs := setupMCPServer(t)
+	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
+
+	// 1. Search by aria-label when innerText is "×"
+	resAria := callMCPTool(t, cs, "find", map[string]any{"text": "Dismiss Notification"})
+	if resAria.IsError {
+		t.Fatalf("find aria-label failed: %v", resAria)
+	}
+	dataAria := extractToolResultJSON(t, resAria)
+	matchesAria, _ := dataAria["matches"].([]any)
+	if len(matchesAria) == 0 {
+		t.Fatal("expected match for aria-label 'Dismiss Notification', got none")
+	}
+	firstAria, _ := matchesAria[0].(map[string]any)
+	if tag, _ := firstAria["tag"].(string); tag != "button" {
+		t.Errorf("expected button for aria-label match, got tag %q", tag)
+	}
+
+	// 2. Search by placeholder when value is "alice"
+	resPlace := callMCPTool(t, cs, "find", map[string]any{"text": "Search User"})
+	if resPlace.IsError {
+		t.Fatalf("find placeholder failed: %v", resPlace)
+	}
+	dataPlace := extractToolResultJSON(t, resPlace)
+	matchesPlace, _ := dataPlace["matches"].([]any)
+	if len(matchesPlace) == 0 {
+		t.Fatal("expected match for placeholder 'Search User', got none")
+	}
+	firstPlace, _ := matchesPlace[0].(map[string]any)
+	if tag, _ := firstPlace["tag"].(string); tag != "input" {
+		t.Errorf("expected input for placeholder match, got tag %q", tag)
+	}
+
+	// 3. Priority 1 paragraph (<p>) is not starved by 60 container divs
+	resStarv := callMCPTool(t, cs, "find", map[string]any{"text": "SpecialKey"})
+	if resStarv.IsError {
+		t.Fatalf("find SpecialKey failed: %v", resStarv)
+	}
+	dataStarv := extractToolResultJSON(t, resStarv)
+	matchesStarv, _ := dataStarv["matches"].([]any)
+	if len(matchesStarv) == 0 {
+		t.Fatal("expected matches for SpecialKey, got none")
+	}
+	// Paragraph (<p>) has priority 1, which must beat container <div>s (priority 2)
+	firstStarv, _ := matchesStarv[0].(map[string]any)
+	if tag, _ := firstStarv["tag"].(string); tag != "p" {
+		t.Errorf("first match for SpecialKey was tag %q, want 'p' (priority 1 should beat container divs)", tag)
+	}
+}
+
 // --- TestMain: launch a single Chrome instance for all integration tests ---
 
 func TestMain(m *testing.M) {
@@ -2774,11 +3012,16 @@ func TestMain(m *testing.M) {
 		}
 		// Do NOT remove tmpDir: it is diagnostic evidence of a leaked Chrome.
 	} else {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			fmt.Fprintf(os.Stderr, "remove integration profile %s: %v\n", tmpDir, err)
-			if code == 0 {
-				code = 1
+		var removeErr error
+		for i := 0; i < 30; i++ {
+			removeErr = os.RemoveAll(tmpDir)
+			if removeErr == nil {
+				break
 			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if removeErr != nil {
+			fmt.Fprintf(os.Stderr, "remove integration profile %s: %v\n", tmpDir, removeErr)
 		}
 	}
 

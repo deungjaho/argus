@@ -17,7 +17,7 @@ type AmbiguousMatch struct {
 	Tag   string `json:"tag"`
 	ID    string `json:"id,omitempty"`
 	Class string `json:"class,omitempty"`
-	Text  string `json:"text,omitempty"`  // snippet, <= 80 chars
+	Text  string `json:"text,omitempty"`  // snippet, <= 100 chars
 	XPath string `json:"xpath,omitempty"` // simplified XPath
 	Ref   string `json:"ref,omitempty"`   // CSS selector ref
 }
@@ -55,11 +55,19 @@ func ambiguityFromMap(m map[string]any) (AmbiguityInfo, bool) {
 			}
 			if v, ok := mm["className"].(string); ok {
 				match.Class = v
+			} else if v, ok := mm["class"].(string); ok {
+				match.Class = v
 			}
 			if v, ok := mm["text"].(string); ok {
+				runes := []rune(v)
+				if len(runes) > 100 {
+					v = string(runes[:100])
+				}
 				match.Text = v
 			}
 			if v, ok := mm["xPath"].(string); ok {
+				match.XPath = v
+			} else if v, ok := mm["xpath"].(string); ok {
 				match.XPath = v
 			}
 			if v, ok := mm["ref"].(string); ok {

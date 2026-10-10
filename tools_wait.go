@@ -17,12 +17,28 @@ type waitForInput struct {
 	URLMatches string `json:"url_matches,omitempty"`
 	WaitUntil  string `json:"wait_until,omitempty"` // load | domcontentloaded | networkidle
 	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	TimeMs     int    `json:"time_ms,omitempty"`     // sleep/wait duration alias
+	SleepMs    int    `json:"sleep_ms,omitempty"`    // sleep/wait duration alias
+	DurationMs int    `json:"duration_ms,omitempty"` // sleep/wait duration alias
 	PollMs     int    `json:"poll_ms,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	Target     string `json:"target,omitempty"`
+	CSS        string `json:"css,omitempty"`
+	XPath      string `json:"xpath,omitempty"`
+	Query      string `json:"query,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Timeout    int    `json:"timeout,omitempty"`
+	Delay      int    `json:"delay,omitempty"`
+	DelayMs    int    `json:"delay_ms,omitempty"`
 }
 
 type tryUntilInput struct {
 	Condition   string `json:"condition,omitempty"`
+	Script      string `json:"script,omitempty"`
+	Expression  string `json:"expression,omitempty"`
+	Code        string `json:"code,omitempty"`
 	TimeoutMs   int    `json:"timeout_ms,omitempty"`
+	Timeout     int    `json:"timeout,omitempty"`
 	PollMs      int    `json:"poll_ms,omitempty"`
 	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
@@ -30,105 +46,54 @@ type tryUntilInput struct {
 func registerWaitTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "wait_for",
-		Description: "Wait for a page condition or page load. For element conditions, provide text, text_absent, selector, or url_matches (polls until met or timeout, default 10s). For page load, provide wait_until: 'load' (full page load, default), 'domcontentloaded' (DOM ready, faster), or 'networkidle' (no network requests for 500ms after readyState=complete). Default timeout for page load is 15s. Responds to context cancellation.",
+		Description: "Wait for a page condition (text, selector, url_matches), page load (wait_until: load/networkidle), or sleep (time_ms/delay).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
 
+		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
+		input.Selector = resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
+		if input.Selector == "" && input.Text == "" {
+			input.Text = strings.TrimSpace(input.Query)
+		}
+		if input.URLMatches == "" {
+			input.URLMatches = strings.TrimSpace(input.URL)
+		}
+
+		// --- Fixed duration sleep / delay fallback ---
+		sleepMs := input.TimeMs
+		if sleepMs <= 0 {
+			sleepMs = input.SleepMs
+		}
+		if sleepMs <= 0 {
+			sleepMs = input.DurationMs
+		}
+		if sleepMs <= 0 {
+			sleepMs = resolveTimeout(input.DelayMs, input.Delay)
+		}
+		// If agent requested a simple pause, or specified timeout_ms with no conditions:
+		if sleepMs > 0 || (input.TimeoutMs > 0 && input.Text == "" && input.TextAbsent == "" && input.Selector == "" && input.URLMatches == "" && input.WaitUntil == "") {
+			if sleepMs <= 0 {
+				sleepMs = input.TimeoutMs
+			}
+			select {
+			case <-ctx.Done():
+				return nil, map[string]any{"satisfied": false, "cancelled": true}, ctx.Err()
+			case <-time.After(time.Duration(sleepMs) * time.Millisecond):
+				return nil, map[string]any{"satisfied": true, "slept_ms": sleepMs}, nil
+			}
+		}
+
 		// --- Page load waiting (wait_until) ---
 		if waitUntil := strings.TrimSpace(input.WaitUntil); waitUntil != "" {
-			if waitUntil != "load" && waitUntil != "domcontentloaded" && waitUntil != "networkidle" {
-				return nil, nil, fmt.Errorf("wait_until must be 'load', 'domcontentloaded', or 'networkidle'")
-			}
 			timeout := time.Duration(input.TimeoutMs) * time.Millisecond
 			if timeout <= 0 {
 				timeout = 15 * time.Second
 			}
-			deadline := time.Now().Add(timeout)
-
-			// networkidle counts real in-flight requests via Network domain
-			// events. performance.getEntriesByType only lists *completed*
-			// resources, so a pending fetch would look like idle — it isn't.
-			var netSub *eventSubscription
-			inFlight := map[string]struct{}{}
-			lastActivity := time.Now()
-			if waitUntil == "networkidle" {
-				if conn, err := getConn(ws); err == nil {
-					netSub = conn.subscribeEvents("networkidle", 256, false)
-					_ = cdpRequest(ws, "Network.enable", map[string]any{}, nil)
-					defer conn.hub.unsubscribe(netSub)
-				}
-			}
-			drainNet := func() {
-				if netSub == nil {
-					return
-				}
-				for {
-					select {
-					case ev, ok := <-netSub.ch:
-						if !ok || ev == nil {
-							return
-						}
-						var p struct {
-							RequestID string `json:"requestId"`
-						}
-						_ = json.Unmarshal(ev.Params, &p)
-						switch ev.Method {
-						case "Network.requestWillBeSent":
-							if p.RequestID != "" {
-								inFlight[p.RequestID] = struct{}{}
-							}
-							lastActivity = time.Now()
-						case "Network.loadingFinished", "Network.loadingFailed":
-							delete(inFlight, p.RequestID)
-							lastActivity = time.Now()
-						}
-					default:
-						return
-					}
-				}
-			}
-
-			for time.Now().Before(deadline) {
-				select {
-				case <-ctx.Done():
-					return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
-				default:
-				}
-				drainNet()
-				value, err := cdpEvaluate(ws, `(() => ({
-readyState: document.readyState,
-url: location.href,
-title: document.title
-}))()`, true)
-				if err == nil {
-					if info, ok := value.(map[string]any); ok {
-						readyState, _ := info["readyState"].(string)
-						switch waitUntil {
-						case "domcontentloaded":
-							if readyState == "interactive" || readyState == "complete" {
-								return nil, info, nil
-							}
-						case "load":
-							if readyState == "complete" {
-								return nil, info, nil
-							}
-						case "networkidle":
-							if readyState == "complete" && len(inFlight) == 0 && time.Since(lastActivity) >= 500*time.Millisecond {
-								return nil, info, nil
-							}
-						}
-					}
-				}
-				select {
-				case <-ctx.Done():
-					return nil, map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
-				case <-time.After(100 * time.Millisecond):
-				}
-			}
-			return nil, map[string]any{"timed_out": true, "wait_until": waitUntil, "timeout_ms": timeout.Milliseconds()}, nil
+			res, err := waitForPageLoad(ctx, ws, waitUntil, timeout)
+			return nil, res, err
 		}
 
 		// --- Element condition waiting ---
@@ -176,6 +141,7 @@ title: document.title
 		if err != nil {
 			return nil, nil, err
 		}
+		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
 		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
 		if timeout <= 0 {
 			timeout = 15 * time.Second
@@ -184,7 +150,7 @@ title: document.title
 		if poll <= 0 {
 			poll = 500 * time.Millisecond
 		}
-		condition := strings.TrimSpace(input.Condition)
+		condition := resolveFirstNonEmpty(input.Condition, input.Script, input.Expression, input.Code)
 		if condition == "" {
 			return nil, nil, fmt.Errorf("try_until requires a condition (JS expression that returns truthy when satisfied)")
 		}
@@ -217,6 +183,92 @@ title: document.title
 		}
 		return nil, map[string]any{"satisfied": false, "attempts": attempts, "timed_out": time.Now().After(deadline), "last_result": lastResult}, nil
 	})
+}
+
+func waitForPageLoad(ctx context.Context, ws string, waitUntil string, timeout time.Duration) (map[string]any, error) {
+	if waitUntil != "load" && waitUntil != "domcontentloaded" && waitUntil != "networkidle" {
+		return nil, fmt.Errorf("wait_until must be 'load', 'domcontentloaded', or 'networkidle'")
+	}
+	deadline := time.Now().Add(timeout)
+
+	var netSub *eventSubscription
+	inFlight := map[string]struct{}{}
+	lastActivity := time.Now()
+	if waitUntil == "networkidle" {
+		if conn, err := getConn(ws); err == nil {
+			netSub = conn.subscribeEvents("networkidle", 256, false)
+			_ = cdpRequest(ws, "Network.enable", map[string]any{}, nil)
+			defer conn.hub.unsubscribe(netSub)
+		}
+	}
+	drainNet := func() {
+		if netSub == nil {
+			return
+		}
+		for {
+			select {
+			case ev, ok := <-netSub.ch:
+				if !ok || ev == nil {
+					return
+				}
+				var p struct {
+					RequestID string `json:"requestId"`
+				}
+				_ = json.Unmarshal(ev.Params, &p)
+				switch ev.Method {
+				case "Network.requestWillBeSent":
+					if p.RequestID != "" {
+						inFlight[p.RequestID] = struct{}{}
+					}
+					lastActivity = time.Now()
+				case "Network.loadingFinished", "Network.loadingFailed":
+					delete(inFlight, p.RequestID)
+					lastActivity = time.Now()
+				}
+			default:
+				return
+			}
+		}
+	}
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
+		default:
+		}
+		drainNet()
+		value, err := cdpEvaluate(ws, `(() => ({
+readyState: document.readyState,
+url: location.href,
+title: document.title
+}))()`, true)
+		if err == nil {
+			if info, ok := value.(map[string]any); ok {
+				readyState, _ := info["readyState"].(string)
+				switch waitUntil {
+				case "domcontentloaded":
+					if readyState == "interactive" || readyState == "complete" {
+						return info, nil
+					}
+				case "load":
+					if readyState == "complete" {
+						return info, nil
+					}
+				case "networkidle":
+					if readyState == "complete" && len(inFlight) == 0 && time.Since(lastActivity) >= 500*time.Millisecond {
+						return info, nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return map[string]any{"cancelled": true, "wait_until": waitUntil}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return map[string]any{"timed_out": true, "wait_until": waitUntil, "timeout_ms": timeout.Milliseconds()}, nil
 }
 
 func waitForExpression(input waitForInput) string {

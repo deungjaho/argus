@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G4: Selector Ambiguity</title>
+  <style>
+    .user-card {
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <h2>User Management List</h2>
+  <div id="deleted-user">none</div>
+
+  <div class="user-card" id="user-alice" data-user="alice">
+    <span>Alice</span>
+    <button class="delete-btn" aria-label="Delete Alice">Delete</button>
+  </div>
+
+  <div class="user-card" id="user-bob" data-user="bob">
+    <span>Bob</span>
+    <button class="delete-btn" aria-label="Delete Bob">Delete</button>
+  </div>
+
+  <div class="user-card" id="user-charlie" data-user="charlie">
+    <span>Charlie</span>
+    <button class="delete-btn" aria-label="Delete Charlie">Delete</button>
+  </div>
+
+  <script>
+    document.querySelectorAll('.delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const card = e.target.closest('.user-card');
+        const user = card.getAttribute('data-user');
+        document.getElementById('deleted-user').textContent = user;
+        card.remove();
+      });
+    });
+  </script>
+</body>
+</html>

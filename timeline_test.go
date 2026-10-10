@@ -45,3 +45,39 @@ func TestTimelineEntryRFC3339NanoFormat(t *testing.T) {
 		t.Errorf("RFC3339Nano should contain timezone: %s", formatted)
 	}
 }
+
+func TestTimelineTimeSortingPrecision(t *testing.T) {
+	// In string dictionary comparison, "2026-07-28T12:00:00.1Z" (len 24)
+	// has 'Z' at pos 23, while "2026-07-28T12:00:00.100000001Z" (len 32)
+	// has '0' at pos 23. Since '0' < 'Z', naive string comparison would put
+	// 12:00:00.100000001 BEFORE 12:00:00.1, inverting causality.
+	t1 := "2026-07-28T12:00:00.1Z"
+	t2 := "2026-07-28T12:00:00.100000001Z"
+
+	if !(t2 < t1) {
+		t.Fatalf("expected naive string comparison to be inverted ('0' < 'Z')")
+	}
+
+	entries := []timelineEntry{
+		{Seq: 0, Kind: "second", Timestamp: t2},
+		{Seq: 0, Kind: "first", Timestamp: t1},
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		ti := parseTimelineTime(entries[i].Timestamp)
+		tj := parseTimelineTime(entries[j].Timestamp)
+		if !ti.IsZero() && !tj.IsZero() {
+			if !ti.Equal(tj) {
+				return ti.Before(tj)
+			}
+		}
+		return entries[i].Timestamp < entries[j].Timestamp
+	})
+
+	if entries[0].Kind != "first" {
+		t.Errorf("expected entries[0] to be 'first', got %s", entries[0].Kind)
+	}
+	if entries[1].Kind != "second" {
+		t.Errorf("expected entries[1] to be 'second', got %s", entries[1].Kind)
+	}
+}

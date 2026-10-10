@@ -17,26 +17,40 @@ import (
 
 type networkRequestsInput struct {
 	DurationMs               int    `json:"duration_ms,omitempty"`
+	Duration                 int    `json:"duration,omitempty"`
+	TimeoutMs                int    `json:"timeout_ms,omitempty"`
+	Timeout                  int    `json:"timeout,omitempty"`
 	All                      bool   `json:"all,omitempty"`
 	Limit                    int    `json:"limit,omitempty"`
 	FromRecorder             bool   `json:"from_recorder,omitempty"`
 	TargetID                 string `json:"target_id,omitempty"`
+	Target                   string `json:"target,omitempty"`
+	TabID                    string `json:"tab_id,omitempty"`
 	IncludeNavigationContext bool   `json:"include_navigation_context,omitempty"`
 }
 
 type networkRequestInput struct {
-	URL       string            `json:"url"`
+	URL       string            `json:"url,omitempty"`
+	Href      string            `json:"href,omitempty"`
+	Target    string            `json:"target,omitempty"`
 	Method    string            `json:"method,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Body      string            `json:"body,omitempty"`
 	TimeoutMs int               `json:"timeout_ms,omitempty"`
+	Timeout   int               `json:"timeout,omitempty"`
 }
 
 type consoleMessagesInput struct {
-	DurationMs int  `json:"duration_ms,omitempty"`
-	All        bool `json:"all,omitempty"`
-	Limit      int  `json:"limit,omitempty"`
-	MaxChars   int  `json:"max_chars,omitempty"`
+	DurationMs int    `json:"duration_ms,omitempty"`
+	Duration   int    `json:"duration,omitempty"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	Timeout    int    `json:"timeout,omitempty"`
+	All        bool   `json:"all,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+	MaxChars   int    `json:"max_chars,omitempty"`
+	Target     string `json:"target,omitempty"`
+	TargetID   string `json:"target_id,omitempty"`
+	TabID      string `json:"tab_id,omitempty"`
 }
 
 func registerNetworkTools(server *mcp.Server) {
@@ -49,13 +63,17 @@ func registerNetworkTools(server *mcp.Server) {
 			limit = 40
 		}
 
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
+		if targetID != "" {
+			setCurrentTargetID(targetID)
+		}
+
 		// FromRecorder mode: query the persistent recorder for network events.
 		// This is a compatibility view over recorder data — no live capture,
 		// no response bodies, no new WebSocket connection.
 		// Defaults to the currently selected target for isolation; an
 		// explicit target_id overrides this.
 		if input.FromRecorder {
-			targetID := input.TargetID
 			if targetID == "" {
 				targetID = getCurrentTargetID()
 			}
@@ -74,7 +92,11 @@ func registerNetworkTools(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, err
 		}
-		duration := time.Duration(input.DurationMs) * time.Millisecond
+		durMs := resolveTimeout(input.DurationMs, input.Duration)
+		if durMs <= 0 {
+			durMs = resolveTimeout(input.TimeoutMs, input.Timeout)
+		}
+		duration := time.Duration(durMs) * time.Millisecond
 		if duration <= 0 {
 			duration = 3 * time.Second
 		}
@@ -104,6 +126,12 @@ func registerNetworkTools(server *mcp.Server) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input networkRequestInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("network_request")
 		defer rec.End()
+
+		url := resolveURL(input.URL, input.Href, input.Target)
+		if url != "" {
+			input.URL = normalizeURL(url)
+		}
+		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
 		rec.SetParams(input)
 
 		result, err := makeHTTPRequest(input)
@@ -122,11 +150,18 @@ func registerNetworkTools(server *mcp.Server) {
 		Name:        "console_messages",
 		Description: "Capture console messages for a short duration (default 3s). Returns console.log/warn/error and uncaught exceptions. Set all=true to include all log levels (default only shows warnings, errors, and exceptions).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input consoleMessagesInput) (*mcp.CallToolResult, any, error) {
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
-		duration := time.Duration(input.DurationMs) * time.Millisecond
+		durMs := resolveTimeout(input.DurationMs, input.Duration)
+		if durMs <= 0 {
+			durMs = resolveTimeout(input.TimeoutMs, input.Timeout)
+		}
+		duration := time.Duration(durMs) * time.Millisecond
 		if duration <= 0 {
 			duration = 3 * time.Second
 		}

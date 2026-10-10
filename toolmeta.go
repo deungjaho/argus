@@ -1,5 +1,9 @@
 package main
 
+import (
+	"strings"
+)
+
 // toolMetaRegistry is the single declaration source for all MCP tools.
 // It drives:
 //   - --toolsets capability filtering
@@ -31,17 +35,21 @@ var toolMetaRegistry = []ToolMeta{
 	{Name: "inspect_point", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Inspect the element under a viewport or image coordinate."},
 	{Name: "find", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Search the page for text or regex; returns matching elements."},
 	{Name: "get_element", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Get detailed info about one element (html, attrs, style, box)."},
+	{Name: "diff_snapshot", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Diff current page against a stored snapshot: added/removed/changed elements, URL change, plus evidence since then."},
 
 	// --- Act ---
 	// click and fill are in the default loop.
 	{Name: "click", Capability: CapDefault, SideEffects: []string{"clicks_element"}, Sensitivity: "low", Idempotent: false, Description: "Click an element by ref/selector/coordinates."},
 	{Name: "type", Capability: CapCore, SideEffects: []string{"types_text", "sends_key"}, Sensitivity: "low", Idempotent: false, Description: "Type text into a focused or selected element, or send a keyboard key."},
 	{Name: "fill", Capability: CapDefault, SideEffects: []string{"fills_form_field", "fills_form_fields", "selects_dropdown"}, Sensitivity: "low", Idempotent: false, Description: "Fill a form field (clears first), fill multiple fields, or select dropdown options."},
+	{Name: "batch_actions", Capability: CapCore, SideEffects: []string{"executes_batch_actions"}, Sensitivity: "low", Idempotent: false, Description: "Execute a sequence of UI interactions (click, fill, type, wait_for, hover, scroll, navigate) in a single turn."},
 	{Name: "scroll", Capability: CapCore, SideEffects: []string{"scrolls_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Scroll the viewport by amount or to an element."},
 	{Name: "hover", Capability: CapCore, SideEffects: []string{"hovers_element"}, Sensitivity: "low", Idempotent: true, Description: "Hover over an element."},
 	{Name: "drag", Capability: CapCore, SideEffects: []string{"drags_element"}, Sensitivity: "low", Idempotent: false, Description: "Drag an element to a target or coordinate."},
 	{Name: "upload_file", Capability: CapCore, SideEffects: []string{"uploads_files", "reads_local_file"}, Sensitivity: "medium", Idempotent: false, Description: "Upload local files to a file input."},
 	{Name: "handle_dialog", Capability: CapCore, SideEffects: []string{"handles_dialog"}, Sensitivity: "low", Idempotent: false, Description: "Accept or dismiss a JS dialog (alert/confirm/prompt)."},
+	{Name: "start_recording", Capability: CapCore, SideEffects: []string{"records_user_input"}, Sensitivity: "medium", Idempotent: false, Description: "Record human clicks/fills/keys on the tab for later replay via batch_actions."},
+	{Name: "stop_recording", Capability: CapCore, SideEffects: []string{"writes_recording_file"}, Sensitivity: "medium", Idempotent: true, Description: "Stop recording; returns batch_actions-compatible steps and saves them to disk."},
 
 	// --- Wait ---
 	// wait_for and exists are in the default loop.
@@ -159,16 +167,18 @@ func splitComma(s string) []string {
 	current := ""
 	for _, c := range s {
 		if c == ',' {
-			if current != "" {
-				parts = append(parts, current)
+			trimmed := strings.TrimSpace(current)
+			if trimmed != "" {
+				parts = append(parts, trimmed)
 			}
 			current = ""
 		} else {
 			current += string(c)
 		}
 	}
-	if current != "" {
-		parts = append(parts, current)
+	trimmed := strings.TrimSpace(current)
+	if trimmed != "" {
+		parts = append(parts, trimmed)
 	}
 	return parts
 }

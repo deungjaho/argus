@@ -77,10 +77,16 @@ func findTargetByURL(targets []browserTarget, targetURL string) *browserTarget {
 	return nil
 }
 
-// resolveTarget finds the current target, preferring targetID over URL.
+// resolveTarget finds the target, preferring explicitID, then targetID over URL.
+// When explicitID is provided, it does NOT mutate currentTargetID, ensuring concurrency safety.
 // If targetID is set but the target no longer exists, returns an error
 // (does NOT silently switch to another tab with the same URL).
-func resolveTarget() (*browserTarget, error) {
+func resolveTarget(explicitID ...string) (*browserTarget, error) {
+	var targetID string
+	if len(explicitID) > 0 {
+		targetID = strings.TrimSpace(explicitID[0])
+	}
+
 	url, _, attach := getConfig()
 	url = strings.TrimSpace(url)
 
@@ -96,6 +102,14 @@ func resolveTarget() (*browserTarget, error) {
 	targets, err := cdpTargets()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list targets: %w", err)
+	}
+
+	// 0. Explicit targetID given (isolated lookup, no mutation of global active target)
+	if targetID != "" {
+		if target := findTargetByID(targets, targetID); target != nil {
+			return target, nil
+		}
+		return nil, fmt.Errorf("target %s not found (tab closed or invalid ID)", targetID)
 	}
 
 	// 1. Try targetID first (stable identity)
@@ -126,7 +140,7 @@ func resolveTarget() (*browserTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	tabID, err := cdpCreateTarget(version.WebSocketDebuggerURL, url, false)
+	tabID, err := cdpCreateTarget(version.WebSocketDebuggerURL, url, !wantFocus())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tab: %w", err)
 	}

@@ -13,27 +13,38 @@ func registerConfigTools(server *mcp.Server) {
 		Port    int    `json:"port,omitempty"`
 		Attach  *bool  `json:"attach,omitempty"`
 		Profile string `json:"profile,omitempty"`
+		Focus   *bool  `json:"focus,omitempty"`
+		Target  string `json:"target,omitempty"`
+		Href    string `json:"href,omitempty"`
+	}
+
+	type statusInput struct {
+		Target string `json:"target,omitempty"`
+		TabID  string `json:"tab_id,omitempty"`
 	}
 
 	addTool(server, &mcp.Tool{
-		Name: "configure",
-		Description: "Configure the runtime target. Chrome via CDP.\n" +
-			"\n" +
-			"Options:\n" +
-			"- url: target URL (e.g. \"http://localhost:3003\")\n" +
-			"- port: dev server port (derives url as http://localhost:PORT)\n" +
-			"- attach: if true, don't launch Chrome — connect to an existing CDP endpoint at the configured port.\n" +
-			"- profile: \"isolated\" (default) or \"user\" (real Chrome profile with cookies/tokens)\n" +
-			"\n" +
-			"Examples:\n" +
-			"  {\"url\": \"http://localhost:3003\"} — launch Chrome to localhost:3003\n" +
-			"  {\"port\": 9222, \"attach\": true, \"url\": \"http://localhost:3003\"} — attach to existing Chrome",
+		Name:        "configure",
+		Description: "Set target URL/port, attach mode, profile (isolated/user), and window focus.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input configureInput) (*mcp.CallToolResult, any, error) {
-		setConfig(input.URL, input.Port, input.Attach)
+		resolvedURL := resolveURL(input.URL, input.Href, input.Target)
+		if resolvedURL != "" {
+			resolvedURL = normalizeURL(resolvedURL)
+		}
+		port := input.Port
+		if port == 0 && input.Target != "" && !looksLikeURL(input.Target) {
+			if p, ok := isNumericPort(input.Target); ok {
+				port = p
+			}
+		}
+		setConfig(resolvedURL, port, input.Attach)
 		if input.Profile == "user" {
 			setProfile("user")
 		} else if input.Profile == "isolated" {
 			setProfile("isolated")
+		}
+		if input.Focus != nil {
+			setFocus(*input.Focus)
 		}
 		status, err := browserStatus()
 		return nil, status, err
@@ -42,7 +53,10 @@ func registerConfigTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "status",
 		Description: "Return the current runtime status: configured URL/port, Chrome running state and tab/page info.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input statusInput) (*mcp.CallToolResult, any, error) {
+		if tabID := resolveFirstNonEmpty(input.TabID, input.Target); tabID != "" && !looksLikeURL(tabID) {
+			setCurrentTargetID(tabID)
+		}
 		status, err := browserStatus()
 		return nil, status, err
 	})
@@ -60,6 +74,7 @@ func browserStatus() (map[string]any, error) {
 		"cdp_port":        cdpPort,
 		"attach_mode":     attach,
 		"profile_mode":    profileMode,
+		"focus_mode":      wantFocus(),
 		"browser_enabled": strings.TrimSpace(url) != "",
 	}
 	if !status["browser_enabled"].(bool) {

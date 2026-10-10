@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -14,6 +16,7 @@ type clickInput struct {
 	Ref            string   `json:"ref,omitempty"`
 	Selector       string   `json:"selector,omitempty"`
 	Text           string   `json:"text,omitempty"`
+	Snapshot       string   `json:"snapshot,omitempty"` // snapshot_id the ref came from — enables stale-ref detection
 	X              *float64 `json:"x,omitempty"`
 	Y              *float64 `json:"y,omitempty"`
 	ImageX         *float64 `json:"image_x,omitempty"`
@@ -24,6 +27,14 @@ type clickInput struct {
 	Button         string   `json:"button,omitempty"`
 	ClickCount     int      `json:"click_count,omitempty"`
 	TimeoutMs      int      `json:"timeout_ms,omitempty"`
+	Timeout        int      `json:"timeout,omitempty"`
+	Delay          int      `json:"delay,omitempty"`
+	DelayMs        int      `json:"delay_ms,omitempty"`
+	Target         string   `json:"target,omitempty"`
+	CSS            string   `json:"css,omitempty"`
+	XPath          string   `json:"xpath,omitempty"`
+	Query          string   `json:"query,omitempty"`
+	WaitUntil      string   `json:"wait_until,omitempty"`
 	NoWait         bool     `json:"no_wait,omitempty"`
 }
 
@@ -31,41 +42,75 @@ type typeInput struct {
 	Ref       string `json:"ref,omitempty"`
 	Selector  string `json:"selector,omitempty"`
 	Text      string `json:"text,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Input     string `json:"input,omitempty"`
 	Key       string `json:"key,omitempty"`
 	Modifiers string `json:"modifiers,omitempty"` // e.g. "ctrl", "cmd+shift" — with key only
 	Clear     bool   `json:"clear,omitempty"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Timeout   int    `json:"timeout,omitempty"`
+	Delay     int    `json:"delay,omitempty"`
+	DelayMs   int    `json:"delay_ms,omitempty"`
+	Target    string `json:"target,omitempty"`
+	CSS       string `json:"css,omitempty"`
+	XPath     string `json:"xpath,omitempty"`
+	Query     string `json:"query,omitempty"`
 	NoWait    bool   `json:"no_wait,omitempty"`
 }
 
 type fillInput struct {
 	Ref      string   `json:"ref,omitempty"`
 	Selector string   `json:"selector,omitempty"`
+	Snapshot string   `json:"snapshot,omitempty"` // snapshot_id the ref came from — enables stale-ref detection
 	Value    string   `json:"value,omitempty"`
+	Text     string   `json:"text,omitempty"`
+	Input    string   `json:"input,omitempty"`
 	Values   []string `json:"values,omitempty"`
 	Fields   []struct {
 		Ref      string `json:"ref,omitempty"`
 		Selector string `json:"selector,omitempty"`
 		Value    string `json:"value"`
 	} `json:"fields,omitempty"`
-	TimeoutMs int  `json:"timeout_ms,omitempty"`
-	NoWait    bool `json:"no_wait,omitempty"`
+	Clear     bool   `json:"clear,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Timeout   int    `json:"timeout,omitempty"`
+	Delay     int    `json:"delay,omitempty"`
+	DelayMs   int    `json:"delay_ms,omitempty"`
+	Target    string `json:"target,omitempty"`
+	CSS       string `json:"css,omitempty"`
+	XPath     string `json:"xpath,omitempty"`
+	Query     string `json:"query,omitempty"`
+	NoWait    bool   `json:"no_wait,omitempty"`
 }
 
 type scrollInput struct {
-	X      *float64 `json:"x,omitempty"`
-	Y      *float64 `json:"y,omitempty"`
-	DeltaX float64  `json:"delta_x,omitempty"`
-	DeltaY float64  `json:"delta_y,omitempty"`
+	X         *float64 `json:"x,omitempty"`
+	Y         *float64 `json:"y,omitempty"`
+	DeltaX    float64  `json:"delta_x,omitempty"`
+	DeltaY    float64  `json:"delta_y,omitempty"`
+	Ref       string   `json:"ref,omitempty"`
+	Selector  string   `json:"selector,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	CSS       string   `json:"css,omitempty"`
+	XPath     string   `json:"xpath,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Direction string   `json:"direction,omitempty"`
+	Amount    float64  `json:"amount,omitempty"`
+	Distance  float64  `json:"distance,omitempty"`
 }
 
 type hoverInput struct {
 	Ref       string   `json:"ref,omitempty"`
 	Selector  string   `json:"selector,omitempty"`
 	Text      string   `json:"text,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	CSS       string   `json:"css,omitempty"`
+	XPath     string   `json:"xpath,omitempty"`
+	Query     string   `json:"query,omitempty"`
 	X         *float64 `json:"x,omitempty"`
 	Y         *float64 `json:"y,omitempty"`
 	TimeoutMs int      `json:"timeout_ms,omitempty"`
+	Timeout   int      `json:"timeout,omitempty"`
 	NoWait    bool     `json:"no_wait,omitempty"`
 }
 
@@ -73,11 +118,46 @@ type dragInput struct {
 	FromRef      string `json:"from_ref,omitempty"`
 	FromSelector string `json:"from_selector,omitempty"`
 	FromText     string `json:"from_text,omitempty"`
+	FromTarget   string `json:"from_target,omitempty"`
 	ToRef        string `json:"to_ref,omitempty"`
 	ToSelector   string `json:"to_selector,omitempty"`
 	ToText       string `json:"to_text,omitempty"`
+	ToTarget     string `json:"to_target,omitempty"`
 	TimeoutMs    int    `json:"timeout_ms,omitempty"`
+	Timeout      int    `json:"timeout,omitempty"`
 	NoWait       bool   `json:"no_wait,omitempty"`
+}
+
+type batchActionStep struct {
+	Action    string   `json:"action"` // click, fill, type, wait_for, hover, scroll, navigate, assert, extract
+	Target    string   `json:"target,omitempty"`
+	Ref       string   `json:"ref,omitempty"`
+	Selector  string   `json:"selector,omitempty"`
+	CSS       string   `json:"css,omitempty"`
+	XPath     string   `json:"xpath,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Value     string   `json:"value,omitempty"`
+	Input     string   `json:"input,omitempty"`
+	Values    []string `json:"values,omitempty"`
+	Key       string   `json:"key,omitempty"`
+	Modifiers string   `json:"modifiers,omitempty"`
+	Clear     bool     `json:"clear,omitempty"`
+	DeltaX    float64  `json:"delta_x,omitempty"`
+	DeltaY    float64  `json:"delta_y,omitempty"`
+	TimeoutMs int      `json:"timeout_ms,omitempty"`
+	Timeout   int      `json:"timeout,omitempty"`
+	Delay     int      `json:"delay,omitempty"`
+	DelayMs   int      `json:"delay_ms,omitempty"`
+	NoWait    bool     `json:"no_wait,omitempty"`
+	URL       string   `json:"url,omitempty"`
+	Href      string   `json:"href,omitempty"`
+	Name      string   `json:"name,omitempty"`     // extract: variable name for {{name}} substitution in later steps
+	Attr      string   `json:"attr,omitempty"`     // extract: text (default) | value | html | attr:<name>
+	Optional  bool     `json:"optional,omitempty"` // on failure: record error but continue the batch
+}
+
+type batchActionsInput struct {
+	Actions []batchActionStep `json:"actions"`
 }
 
 // --- tool registrations ---
@@ -91,6 +171,9 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
+		if delay := resolveTimeout(input.DelayMs, input.Delay); delay > 0 {
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -121,6 +204,7 @@ func registerInteractionTools(server *mcp.Server) {
 		if page := miniSnapshot(ws); page != nil {
 			result["page"] = page
 		}
+		attachEvidence(rec, ws, result)
 		rec.SetResult(result)
 		return nil, result, nil
 	})
@@ -132,6 +216,11 @@ func registerInteractionTools(server *mcp.Server) {
 		rec := BeginAction("type")
 		defer rec.End()
 		rec.SetParams(input)
+
+		if delay := resolveTimeout(input.DelayMs, input.Delay); delay > 0 {
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
 
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -148,13 +237,14 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetResult(map[string]any{"action_id": string(rec.ID), "key": key})
 			return nil, map[string]any{"action_id": string(rec.ID), "key": key}, nil
 		}
-		if input.Text == "" && !input.Clear {
+		text := resolveValue(input.Text, input.Value, input.Input)
+		if text == "" && !input.Clear {
 			rec.SetErrorFromError(fmt.Errorf("text or key is required"))
 			return nil, nil, fmt.Errorf("text or key is required")
 		}
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
+		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
 		if selector != "" {
-			opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+			opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
 			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
@@ -166,14 +256,16 @@ func registerInteractionTools(server *mcp.Server) {
 				return nil, nil, err
 			}
 		}
-		if input.Text != "" {
-			if err := cdpInsertText(ws, input.Text); err != nil {
+		if text != "" {
+			if err := cdpInsertText(ws, text); err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
 		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "typed": len([]rune(input.Text)), "selector": selector, "cleared": input.Clear})
-		return nil, map[string]any{"action_id": string(rec.ID), "typed": len([]rune(input.Text)), "selector": selector, "cleared": input.Clear}, nil
+		result := map[string]any{"action_id": string(rec.ID), "typed": len([]rune(text)), "selector": selector, "cleared": input.Clear}
+		attachEvidence(rec, ws, result)
+		rec.SetResult(result)
+		return nil, result, nil
 	})
 
 	addTool(server, &mcp.Tool{
@@ -184,17 +276,22 @@ func registerInteractionTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
+		if delay := resolveTimeout(input.DelayMs, input.Delay); delay > 0 {
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
-		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+		opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
 		if len(input.Fields) > 0 {
 			results := []map[string]any{}
 			for _, field := range input.Fields {
-				selector := firstNonEmpty(strings.TrimSpace(field.Ref), strings.TrimSpace(field.Selector))
+				selector := resolveSelector(field.Ref, field.Selector, "", "", "", "")
 				if selector == "" {
 					results = append(results, map[string]any{"error": "no ref or selector", "value": field.Value})
 					continue
@@ -203,11 +300,7 @@ func registerInteractionTools(server *mcp.Server) {
 					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
 					continue
 				}
-				if _, err := cdpEvaluate(ws, focusExpression(selector, true), true); err != nil {
-					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
-					continue
-				}
-				if err := cdpInsertText(ws, field.Value); err != nil {
+				if _, err := cdpEvaluate(ws, fillExpression(selector, field.Value), true); err != nil {
 					results = append(results, map[string]any{"selector": selector, "error": err.Error()})
 					continue
 				}
@@ -217,13 +310,23 @@ func registerInteractionTools(server *mcp.Server) {
 			if page := miniSnapshot(ws); page != nil {
 				result["page"] = page
 			}
+			attachEvidence(rec, ws, result)
 			rec.SetResult(result)
 			return nil, result, nil
 		}
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
+		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
+		val := resolveValue(input.Value, input.Text, input.Input)
 		if selector == "" {
 			rec.SetErrorFromError(fmt.Errorf("fill requires ref or selector"))
 			return nil, nil, fmt.Errorf("fill requires ref or selector")
+		}
+		if snapID := strings.TrimSpace(input.Snapshot); snapID != "" {
+			mark, err := resolveSnapshotMark(snapID, selector)
+			if err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			opts.ExpectMark = mark
 		}
 		if len(input.Values) > 0 {
 			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
@@ -239,6 +342,7 @@ func registerInteractionTools(server *mcp.Server) {
 			if page := miniSnapshot(ws); page != nil {
 				result["page"] = page
 			}
+			attachEvidence(rec, ws, result)
 			rec.SetResult(result)
 			return nil, result, nil
 		}
@@ -246,18 +350,15 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		if _, err := cdpEvaluate(ws, focusExpression(selector, true), true); err != nil {
+		if _, err := cdpEvaluate(ws, fillExpression(selector, val), true); err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		if err := cdpInsertText(ws, input.Value); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(input.Value))}
+		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(val))}
 		if page := miniSnapshot(ws); page != nil {
 			result["page"] = page
 		}
+		attachEvidence(rec, ws, result)
 		rec.SetResult(result)
 		return nil, result, nil
 	})
@@ -284,15 +385,33 @@ func registerInteractionTools(server *mcp.Server) {
 		deltaX := input.DeltaX
 		deltaY := input.DeltaY
 		if deltaX == 0 && deltaY == 0 {
-			deltaY = 500
+			amount := input.Amount
+			if amount == 0 {
+				amount = input.Distance
+			}
+			if amount == 0 {
+				amount = 500
+			}
+			switch strings.ToLower(strings.TrimSpace(input.Direction)) {
+			case "up":
+				deltaY = -amount
+			case "right":
+				deltaX = amount
+			case "left":
+				deltaX = -amount
+			default:
+				deltaY = amount
+			}
 		}
 		result, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result})
-		return nil, map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result}, nil
+		out := map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result}
+		attachEvidence(rec, ws, out)
+		rec.SetResult(out)
+		return nil, out, nil
 	})
 
 	addTool(server, &mcp.Tool{
@@ -313,13 +432,14 @@ func registerInteractionTools(server *mcp.Server) {
 		if input.X != nil && input.Y != nil {
 			x, y = *input.X, *input.Y
 		} else {
-			selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-			text := strings.TrimSpace(input.Text)
+			selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
+			text := resolveFirstNonEmpty(input.Text, input.Query)
 			if selector == "" && text == "" {
 				rec.SetErrorFromError(fmt.Errorf("hover requires ref, selector, text, or x/y"))
 				return nil, nil, fmt.Errorf("hover requires ref, selector, text, or x/y")
 			}
-			opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+			timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+			opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
 			px, py, _, err := autoWaitForElement(ctx, ws, selector, text, opts)
 			if err != nil {
 				rec.SetErrorFromError(err)
@@ -331,8 +451,10 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "hovered": map[string]any{"x": x, "y": y}})
-		return nil, map[string]any{"action_id": string(rec.ID), "hovered": map[string]any{"x": x, "y": y}}, nil
+		out := map[string]any{"action_id": string(rec.ID), "hovered": map[string]any{"x": x, "y": y}}
+		attachEvidence(rec, ws, out)
+		rec.SetResult(out)
+		return nil, out, nil
 	})
 
 	addTool(server, &mcp.Tool{
@@ -349,8 +471,8 @@ func registerInteractionTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
-		fromSelector := firstNonEmpty(strings.TrimSpace(input.FromRef), strings.TrimSpace(input.FromSelector))
-		toSelector := firstNonEmpty(strings.TrimSpace(input.ToRef), strings.TrimSpace(input.ToSelector))
+		fromSelector := resolveSelector(input.FromRef, input.FromSelector, "", input.FromTarget, "", "")
+		toSelector := resolveSelector(input.ToRef, input.ToSelector, "", input.ToTarget, "", "")
 		if fromSelector == "" && input.FromText == "" {
 			rec.SetErrorFromError(fmt.Errorf("drag requires from_ref/from_selector/from_text"))
 			return nil, nil, fmt.Errorf("drag requires from_ref/from_selector/from_text")
@@ -359,7 +481,8 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(fmt.Errorf("drag requires to_ref/to_selector/to_text"))
 			return nil, nil, fmt.Errorf("drag requires to_ref/to_selector/to_text")
 		}
-		opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+		opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
 		if _, _, _, err := autoWaitForElement(ctx, ws, fromSelector, input.FromText, opts); err != nil {
 			rec.SetErrorFromError(fmt.Errorf("drag source: %w", err))
 			return nil, nil, fmt.Errorf("drag source: %w", err)
@@ -373,8 +496,265 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"action_id": string(rec.ID), "dragged": value})
-		return nil, map[string]any{"action_id": string(rec.ID), "dragged": value}, nil
+		out := map[string]any{"action_id": string(rec.ID), "dragged": value}
+		attachEvidence(rec, ws, out)
+		rec.SetResult(out)
+		return nil, out, nil
+	})
+
+	addTool(server, &mcp.Tool{
+		Name:        "batch_actions",
+		Description: "Execute a sequence of UI interactions (click, fill, type, wait_for, hover, scroll, navigate) in a single turn. Returns execution status and post-action page snapshot.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input batchActionsInput) (*mcp.CallToolResult, any, error) {
+		rec := BeginAction("batch_actions")
+		defer rec.End()
+		rec.SetParams(input)
+
+		ws, err := requireTargetWS()
+		if err != nil {
+			rec.SetErrorFromError(err)
+			return nil, nil, err
+		}
+		rec.SetTarget(getCurrentTargetID())
+
+		if len(input.Actions) == 0 {
+			err := fmt.Errorf("no actions provided in batch")
+			rec.SetErrorFromError(err)
+			return nil, nil, err
+		}
+
+		stepResults := make([]map[string]any, 0, len(input.Actions))
+		vars := map[string]string{}
+
+		// failStep records the failed step (with a post-failure snapshot so
+		// the agent can self-correct) and returns a wrapped error.
+		failStep := func(i int, actionType string, stepRes map[string]any, err error) (*mcp.CallToolResult, any, error) {
+			rec.SetErrorFromError(err)
+			stepRes["error"] = err.Error()
+			stepResults = append(stepResults, stepRes)
+			res := map[string]any{
+				"action_id":   string(rec.ID),
+				"total":       len(input.Actions),
+				"completed":   len(stepResults) - 1,
+				"failed_step": i + 1,
+				"results":     stepResults,
+			}
+			if page := miniSnapshot(ws); page != nil {
+				res["page"] = page
+			}
+			attachEvidence(rec, ws, res)
+			rec.SetResult(res)
+			return nil, res, fmt.Errorf("step %d (%s) failed: %w", i+1, actionType, err)
+		}
+
+		varRef := regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
+		expandVars := func(s string) string {
+			if !strings.Contains(s, "{{") {
+				return s
+			}
+			return varRef.ReplaceAllStringFunc(s, func(m string) string {
+				if v, ok := vars[m[2:len(m)-2]]; ok {
+					return v
+				}
+				return m // unknown variable stays literal
+			})
+		}
+
+		runStep := func(step batchActionStep, actionType, target string, stepRes map[string]any) error {
+			if delay := resolveTimeout(step.DelayMs, step.Delay); delay > 0 {
+				time.Sleep(time.Duration(delay) * time.Millisecond)
+			}
+			timeoutMs := resolveTimeout(step.TimeoutMs, step.Timeout)
+			opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: step.NoWait}
+			switch actionType {
+			case "click":
+				x, y, err := resolveClickPoint(ctx, ws, clickInput{
+					Ref: target, Selector: target, Text: expandVars(step.Text),
+					TimeoutMs: timeoutMs, NoWait: step.NoWait,
+				})
+				if err != nil {
+					return err
+				}
+				if err := cdpDispatchMouseClick(ws, x, y, "left", 1); err != nil {
+					return err
+				}
+				stepRes["clicked"] = map[string]any{"x": x, "y": y}
+
+			case "fill":
+				val := expandVars(resolveValue(step.Value, step.Text, step.Input))
+				if target == "" {
+					return fmt.Errorf("fill requires target or selector")
+				}
+				if _, _, _, err := autoWaitForElement(ctx, ws, target, "", opts); err != nil {
+					return err
+				}
+				if len(step.Values) > 0 {
+					vals := make([]string, len(step.Values))
+					for j, v := range step.Values {
+						vals[j] = expandVars(v)
+					}
+					if _, err := cdpEvaluate(ws, selectOptionExpression(target, vals), true); err != nil {
+						return err
+					}
+					stepRes["selected"] = vals
+				} else {
+					if _, err := cdpEvaluate(ws, fillExpression(target, val), true); err != nil {
+						return err
+					}
+					stepRes["filled"] = target
+				}
+
+			case "type":
+				key := strings.TrimSpace(step.Key)
+				if key != "" {
+					if err := cdpDispatchKey(ws, expandVars(key), modifierMask(step.Modifiers)); err != nil {
+						return err
+					}
+					stepRes["key"] = key
+				} else {
+					text := resolveValue(step.Text, step.Value, step.Input)
+					text = expandVars(text)
+					if target != "" {
+						if _, _, _, err := autoWaitForElement(ctx, ws, target, "", opts); err != nil {
+							return err
+						}
+					}
+					if target != "" || step.Clear {
+						if _, err := cdpEvaluate(ws, focusExpression(target, step.Clear), true); err != nil {
+							return err
+						}
+					}
+					if text != "" {
+						if err := cdpInsertText(ws, text); err != nil {
+							return err
+						}
+					}
+					stepRes["typed"] = len([]rune(text))
+				}
+
+			case "wait_for":
+				if _, _, _, err := autoWaitForElement(ctx, ws, target, expandVars(step.Text), opts); err != nil {
+					return err
+				}
+				stepRes["waited"] = true
+
+			case "hover":
+				px, py, _, err := autoWaitForElement(ctx, ws, target, expandVars(step.Text), opts)
+				if err != nil {
+					return err
+				}
+				if err := cdpDispatchMouseHover(ws, px, py); err != nil {
+					return err
+				}
+				stepRes["hovered"] = map[string]any{"x": px, "y": py}
+
+			case "scroll":
+				deltaX := step.DeltaX
+				deltaY := step.DeltaY
+				if deltaX == 0 && deltaY == 0 {
+					deltaY = 500
+				}
+				x, y, _ := resolveScrollPoint(ws, scrollInput{})
+				_, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
+				if err != nil {
+					return err
+				}
+				stepRes["scrolled"] = map[string]any{"delta_x": deltaX, "delta_y": deltaY}
+
+			case "navigate":
+				url := expandVars(resolveURL(step.URL, step.Href, step.Target))
+				if url == "" {
+					return fmt.Errorf("navigate requires url")
+				}
+				url = normalizeURL(url)
+				if _, err := cdpPageNavigate(ws, url, 10*time.Second); err != nil {
+					return err
+				}
+				stepRes["navigated"] = url
+
+			case "assert":
+				// Verify state: element present (target), text on page,
+				// or URL contains. Fails the batch unless optional.
+				url := expandVars(resolveFirstNonEmpty(step.URL, step.Href))
+				if url == "" && (looksLikeURL(step.Target) || looksLikeURL(target)) {
+					url = expandVars(resolveFirstNonEmpty(step.Target, target))
+				}
+				text := expandVars(step.Text)
+				if url != "" {
+					v, err := cdpEvaluate(ws, fmt.Sprintf(`location.href.includes(%s)`, jsString(url)), true)
+					if err != nil {
+						return err
+					}
+					if ok, _ := v.(bool); !ok {
+						return fmt.Errorf("assert failed: url does not contain %q", url)
+					}
+					stepRes["asserted_url"] = url
+					return nil
+				}
+				if target == "" && text == "" {
+					return fmt.Errorf("assert requires target/selector, text, or url")
+				}
+				if _, _, _, err := autoWaitForElement(ctx, ws, target, text, opts); err != nil {
+					return fmt.Errorf("assert failed: %w", err)
+				}
+				stepRes["asserted"] = true
+
+			case "extract":
+				// Pull a value out of the page into a named variable;
+				// later steps reference it as {{name}}.
+				name := strings.TrimSpace(step.Name)
+				if name == "" {
+					return fmt.Errorf("extract requires name (variable to store)")
+				}
+				if target == "" {
+					return fmt.Errorf("extract requires target or selector")
+				}
+				attr := strings.TrimSpace(step.Attr)
+				v, err := cdpEvaluate(ws, extractExpression(target, attr), true)
+				if err != nil {
+					return err
+				}
+				s, _ := v.(string)
+				vars[name] = s
+				stepRes["extracted"] = map[string]any{"name": name, "value": s}
+
+			default:
+				return fmt.Errorf("unsupported action type: %s", actionType)
+			}
+			return nil
+		}
+
+		for i, step := range input.Actions {
+			actionType := strings.ToLower(strings.TrimSpace(step.Action))
+			target := expandVars(resolveSelector(step.Ref, step.Selector, step.CSS, step.Target, step.XPath, ""))
+			stepRes := map[string]any{"index": i + 1, "action": actionType}
+
+			if err := runStep(step, actionType, target, stepRes); err != nil {
+				if step.Optional {
+					stepRes["error"] = err.Error()
+					stepRes["skipped"] = true
+				} else {
+					return failStep(i, actionType, stepRes, err)
+				}
+			}
+			stepResults = append(stepResults, stepRes)
+		}
+
+		result := map[string]any{
+			"action_id": string(rec.ID),
+			"total":     len(input.Actions),
+			"completed": len(stepResults),
+			"results":   stepResults,
+		}
+		if len(vars) > 0 {
+			result["vars"] = vars
+		}
+		if page := miniSnapshot(ws); page != nil {
+			result["page"] = page
+		}
+		attachEvidence(rec, ws, result)
+		rec.SetResult(result)
+		return nil, result, nil
 	})
 }
 
@@ -387,19 +767,55 @@ func resolveClickPoint(ctx context.Context, ws string, input clickInput) (float6
 	if input.X != nil && input.Y != nil {
 		return *input.X, *input.Y, nil
 	}
-	selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
-	text := strings.TrimSpace(input.Text)
+	selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
+	text := resolveFirstNonEmpty(input.Text, input.Query)
 	if selector == "" && text == "" {
 		return 0, 0, fmt.Errorf("click requires ref, selector, text, x/y, or image_x/image_y")
 	}
-	opts := autoWaitOptions{TimeoutMs: input.TimeoutMs, NoWait: input.NoWait}
+	timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+	opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
+	if snapID := strings.TrimSpace(input.Snapshot); snapID != "" {
+		mark, err := resolveSnapshotMark(snapID, selector)
+		if err != nil {
+			return 0, 0, err
+		}
+		opts.ExpectMark = mark
+	}
 	x, y, _, err := autoWaitForElement(ctx, ws, selector, text, opts)
 	return x, y, err
+}
+
+// extractExpression reads a value off an element for batch_actions
+// extract steps. attr: "text" (default), "value", "html", or "attr:<name>".
+func extractExpression(selector, attr string) string {
+	return fmt.Sprintf(`(() => {
+const selector = %s;
+const attr = %s;
+let el = null;
+try {
+  el = document.querySelector(selector);
+} catch (e) {
+  el = document.getElementById(selector) ||
+       document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+       document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+       document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+}
+if (!el) throw new Error('extract: element not found');
+if (attr.startsWith('attr:')) return el.getAttribute(attr.slice(5)) || '';
+if (attr === 'value') return 'value' in el ? String(el.value) : '';
+if (attr === 'html') return el.innerHTML;
+return (el.innerText || '').trim();
+})()`, jsString(selector), jsString(attr))
 }
 
 func resolveScrollPoint(ws string, input scrollInput) (float64, float64, error) {
 	if input.X != nil && input.Y != nil {
 		return *input.X, *input.Y, nil
+	}
+	if sel := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, ""); sel != "" || input.Text != "" {
+		if x, y, _, err := autoWaitForElement(context.Background(), ws, sel, input.Text, autoWaitOptions{TimeoutMs: 1500}); err == nil {
+			return x, y, nil
+		}
 	}
 	value, err := cdpEvaluate(ws, `(() => ({x: innerWidth / 2, y: innerHeight / 2}))()`, true)
 	if err != nil {
@@ -417,49 +833,103 @@ func resolveScrollPoint(ws string, input scrollInput) (float64, float64, error) 
 	return x, y, nil
 }
 
-func pointExpression(selector, text string) string {
-	return fmt.Sprintf(`(() => {
-const selector = %s;
-const text = %s;
-const visible = (el) => {
-  const style = getComputedStyle(el);
-  const rect = el.getBoundingClientRect();
-  return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-};
-let el = null;
-if (selector) el = document.querySelector(selector);
-if (!el && text) {
-  const needle = text.toLowerCase();
-  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,canvas,[role],[tabindex],[aria-label],[data-testid],[data-test-id]'));
-  el = candidates.find((node) => visible(node) && (((node.innerText || '') + ' ' + (node.getAttribute('aria-label') || '') + ' ' + (node.getAttribute('placeholder') || '')).toLowerCase().includes(needle)));
-}
-if (!el || !visible(el)) return null;
-el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
-const rect = el.getBoundingClientRect();
-return {x: Math.max(0, Math.min(innerWidth - 1, rect.left + rect.width / 2)), y: Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2))};
-})()`, jsString(selector), jsString(text))
-}
-
 func focusExpression(selector string, clear bool) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const clear = %s;
-const el = selector ? document.querySelector(selector) : document.activeElement;
+let el = null;
+if (selector) {
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    el = document.getElementById(selector) ||
+         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+  }
+} else {
+  el = document.activeElement;
+}
 if (!el) throw new Error(selector ? 'element not found' : 'no active element');
 if (el.scrollIntoView) el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
 if (el.focus) el.focus();
 if (clear) {
   if ('value' in el) {
-    el.value = '';
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
+    const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (desc && desc.set) {
+      desc.set.call(el, '');
+    } else {
+      el.value = '';
+    }
+    if (el._valueTracker) {
+      el._valueTracker.setValue('__argus_cleared__');
+    }
+    el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
   } else if (el.isContentEditable) {
     el.textContent = '';
-    el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContentBackward'}));
+    el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'deleteContentBackward'}));
+    el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
   }
 }
 return true;
 })()`, jsString(selector), fmt.Sprintf("%t", clear))
+}
+
+func fillExpression(selector, text string) string {
+	return fmt.Sprintf(`(() => {
+const selector = %s;
+const text = %s;
+let el = null;
+if (selector) {
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    el = document.getElementById(selector) ||
+         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+  }
+} else {
+  el = document.activeElement;
+}
+if (!el) throw new Error(selector ? 'element not found' : 'no active element');
+if (typeof el.scrollIntoView === 'function') {
+  el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+}
+if (typeof el.focus === 'function') el.focus();
+
+if (el.tagName === 'SELECT') {
+  const opts = Array.from(el.options);
+  for (const opt of opts) opt.selected = false;
+  const opt = opts.find(o => o.value === text || o.text.trim() === text);
+  if (opt) opt.selected = true;
+  el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+  return {filled: true, value: text};
+}
+
+if ('value' in el) {
+  const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+  if (desc && desc.set) {
+    desc.set.call(el, text);
+  } else {
+    el.value = text;
+  }
+  if (el._valueTracker) {
+    el._valueTracker.setValue(text === '' ? '__argus_cleared__' : '');
+  }
+  el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+} else if (el.isContentEditable) {
+  el.textContent = text;
+  el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: text}));
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+}
+return {filled: true, value: text};
+})()`, jsString(selector), jsString(text))
 }
 
 func selectOptionExpression(selector string, values []string) string {
@@ -503,10 +973,7 @@ const visible = (el) => {
 const findEl = (selector, text) => {
   let el = null;
   if (selector) el = document.querySelector(selector);
-  if (!el && text) {
-    const needle = text.toLowerCase();
-    el = Array.from(document.querySelectorAll('*')).find(node => visible(node) && (node.innerText || '').toLowerCase().includes(needle));
-  }
+`+rankedTextMatchJS+`
   return el;
 };
 const from = findEl(fromSelector, fromText);

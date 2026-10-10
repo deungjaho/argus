@@ -9,20 +9,35 @@ import (
 )
 
 type newTabInput struct {
-	URL        string `json:"url"`
+	URL        string `json:"url,omitempty"`
+	Href       string `json:"href,omitempty"`
+	Target     string `json:"target,omitempty"`
 	Background bool   `json:"background,omitempty"`
 }
 
 type selectTabInput struct {
-	TabID string `json:"tab_id"`
+	TabID    string `json:"tab_id,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+	Target   string `json:"target,omitempty"`
+	ID       string `json:"id,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Href     string `json:"href,omitempty"`
+	Title    string `json:"title,omitempty"`
 }
 
 type closeTabInput struct {
-	TabID string `json:"tab_id,omitempty"`
+	TabID    string `json:"tab_id,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
+	Target   string `json:"target,omitempty"`
+	ID       string `json:"id,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Href     string `json:"href,omitempty"`
 }
 
 type forkInput struct {
-	URL string `json:"url,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Href   string `json:"href,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 func registerTabTools(server *mcp.Server) {
@@ -34,10 +49,11 @@ func registerTabTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		url := strings.TrimSpace(input.URL)
+		url := resolveURL(input.URL, input.Href, input.Target)
 		if url == "" {
-			rec.SetErrorFromError(fmt.Errorf("url is required"))
-			return nil, nil, fmt.Errorf("url is required")
+			url = "about:blank"
+		} else {
+			url = normalizeURL(url)
 		}
 		version, err := cdpVersion()
 		if err != nil {
@@ -52,7 +68,9 @@ func registerTabTools(server *mcp.Server) {
 		setConfig(url, 0, nil)
 		if !input.Background {
 			setCurrentTargetID(tabID)
-			_ = cdpActivateTarget(tabID)
+			if wantFocus() {
+				_ = cdpActivateTarget(tabID)
+			}
 		}
 		rec.SetTarget(tabID)
 		rec.SetResult(map[string]any{"tab_id": tabID, "url": url, "background": input.Background, "action_id": string(rec.ID)})
@@ -62,7 +80,7 @@ func registerTabTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "list_tabs",
 		Description: "List all open browser tabs (page-type targets) with their IDs, URLs, and titles.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ tabScopeInput) (*mcp.CallToolResult, any, error) {
 		targets, err := cdpTargets()
 		if err != nil {
 			return nil, nil, err
@@ -83,16 +101,25 @@ func registerTabTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "select_tab",
-		Description: "Activate a browser tab by its ID (from list_tabs). Sets the tab as the current target for subsequent operations.",
+		Description: "Activate a browser tab by its ID (from list_tabs) or URL/title. Sets the tab as the current target for subsequent operations.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input selectTabInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("select_tab")
 		defer rec.End()
 		rec.SetParams(input)
 
-		tabID := strings.TrimSpace(input.TabID)
-		if tabID == "" {
-			rec.SetErrorFromError(fmt.Errorf("tab_id is required"))
-			return nil, nil, fmt.Errorf("tab_id is required")
+		tabID := resolveFirstNonEmpty(input.TabID, input.TargetID, input.ID)
+		urlQuery := resolveURL(input.URL, input.Href, "")
+		if tabID == "" && input.Target != "" {
+			if looksLikeURL(input.Target) {
+				urlQuery = input.Target
+			} else {
+				tabID = strings.TrimSpace(input.Target)
+			}
+		}
+		titleQuery := strings.TrimSpace(input.Title)
+		if tabID == "" && urlQuery == "" && titleQuery == "" {
+			rec.SetErrorFromError(fmt.Errorf("tab_id, url, or title is required"))
+			return nil, nil, fmt.Errorf("tab_id, url, or title is required")
 		}
 		// Verify the tab exists
 		targets, err := cdpTargets()
@@ -100,14 +127,33 @@ func registerTabTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		target := findTargetByID(targets, tabID)
-		if target == nil {
-			rec.SetErrorFromError(fmt.Errorf("tab %s not found", tabID))
-			return nil, nil, fmt.Errorf("tab %s not found", tabID)
+		var target *browserTarget
+		if tabID != "" {
+			target = findTargetByID(targets, tabID)
 		}
-		if err := cdpActivateTarget(tabID); err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
+		if target == nil && urlQuery != "" {
+			target = findTargetByURL(targets, urlQuery)
+		}
+		if target == nil && titleQuery != "" {
+			for i := range targets {
+				if targets[i].Type == "page" && strings.Contains(strings.ToLower(targets[i].Title), strings.ToLower(titleQuery)) {
+					target = &targets[i]
+					break
+				}
+			}
+		}
+		if target == nil {
+			rec.SetErrorFromError(fmt.Errorf("tab not found matching id=%q url=%q title=%q", tabID, urlQuery, titleQuery))
+			return nil, nil, fmt.Errorf("tab not found matching id=%q url=%q title=%q", tabID, urlQuery, titleQuery)
+		}
+		tabID = target.ID
+		// Raising the window is opt-in (--focus): the tool's core job is
+		// selecting the current target, which works without activation.
+		if wantFocus() {
+			if err := cdpActivateTarget(tabID); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
 		}
 		setCurrentTargetID(tabID)
 		setConfig(target.URL, 0, nil)
@@ -118,13 +164,23 @@ func registerTabTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "close_tab",
-		Description: "Close a browser tab by ID. If no tab_id is given, closes the current target tab.",
+		Description: "Close a browser tab by ID or URL. If no tab_id is given, closes the current target tab.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input closeTabInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("close_tab")
 		defer rec.End()
 		rec.SetParams(input)
 
-		tabID := strings.TrimSpace(input.TabID)
+		tabID := resolveFirstNonEmpty(input.TabID, input.TargetID, input.ID)
+		if tabID == "" && input.Target != "" && !looksLikeURL(input.Target) {
+			tabID = strings.TrimSpace(input.Target)
+		}
+		urlQuery := resolveURL(input.URL, input.Href, input.Target)
+		if tabID == "" && urlQuery != "" {
+			targets, _ := cdpTargets()
+			if t := findTargetByURL(targets, urlQuery); t != nil {
+				tabID = t.ID
+			}
+		}
 		if tabID == "" {
 			tabID = getCurrentTargetID()
 			if tabID == "" {
@@ -157,7 +213,7 @@ func registerTabTools(server *mcp.Server) {
 		defer rec.End()
 		rec.SetParams(input)
 
-		url := strings.TrimSpace(input.URL)
+		url := resolveURL(input.URL, input.Href, input.Target)
 		if url == "" {
 			target, err := requireTarget()
 			if err != nil {
@@ -171,7 +227,7 @@ func registerTabTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		tabID, err := cdpCreateTarget(version.WebSocketDebuggerURL, url, false)
+		tabID, err := cdpCreateTarget(version.WebSocketDebuggerURL, url, !wantFocus())
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err

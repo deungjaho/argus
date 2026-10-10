@@ -12,25 +12,33 @@ import (
 // --- get_storage ---
 
 type getStorageInput struct {
-	Type string `json:"type"`          // cookie | local | session
-	Key  string `json:"key,omitempty"` // optional: get specific key
+	Type        string `json:"type,omitempty"` // cookie | local | session
+	StorageType string `json:"storage_type,omitempty"`
+	Target      string `json:"target,omitempty"`
+	Key         string `json:"key,omitempty"` // optional: get specific key
+	Name        string `json:"name,omitempty"`
 }
 
 // --- set_storage ---
 
 type setStorageInput struct {
-	Type   string `json:"type"`              // cookie | local | session
-	Key    string `json:"key"`               // cookie name or storage key
-	Value  string `json:"value"`             // cookie value or storage value
-	Domain string `json:"domain,omitempty"`  // cookie only
-	Path   string `json:"path,omitempty"`    // cookie only (default /)
-	MaxAge int    `json:"max_age,omitempty"` // cookie only (seconds)
+	Type        string `json:"type,omitempty"` // cookie | local | session
+	StorageType string `json:"storage_type,omitempty"`
+	Target      string `json:"target,omitempty"`
+	Key         string `json:"key,omitempty"` // cookie name or storage key
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`   // cookie value or storage value
+	Domain      string `json:"domain,omitempty"`  // cookie only
+	Path        string `json:"path,omitempty"`    // cookie only (default /)
+	MaxAge      int    `json:"max_age,omitempty"` // cookie only (seconds)
 }
 
 // --- clear_storage ---
 
 type clearStorageInput struct {
-	Type string `json:"type"` // all | cookie | local | session
+	Type        string `json:"type,omitempty"` // all | cookie | local | session
+	StorageType string `json:"storage_type,omitempty"`
+	Target      string `json:"target,omitempty"`
 }
 
 func registerStorageTools(server *mcp.Server) {
@@ -42,14 +50,15 @@ func registerStorageTools(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, err
 		}
-		storageType := strings.TrimSpace(input.Type)
+		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
+		key := resolveFirstNonEmpty(input.Key, input.Name)
 		switch storageType {
 		case "cookie":
-			return getCookieStorage(ws, input.Key)
+			return getCookieStorage(ws, key)
 		case "local":
-			return getJSStorage(ws, "localStorage", input.Key)
+			return getJSStorage(ws, "localStorage", key)
 		case "session":
-			return getJSStorage(ws, "sessionStorage", input.Key)
+			return getJSStorage(ws, "sessionStorage", key)
 		default:
 			return nil, nil, fmt.Errorf("type must be cookie, local, or session")
 		}
@@ -69,7 +78,8 @@ func registerStorageTools(server *mcp.Server) {
 		}
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
-		storageType := strings.TrimSpace(input.Type)
+		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
+		input.Key = resolveFirstNonEmpty(input.Key, input.Name)
 		switch storageType {
 		case "cookie":
 			rr, res, err := setCookieStorage(ws, input, rec.ID)
@@ -115,7 +125,10 @@ func registerStorageTools(server *mcp.Server) {
 		}
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
-		storageType := strings.TrimSpace(input.Type)
+		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
+		if storageType == "" {
+			storageType = "all"
+		}
 		results := map[string]any{}
 		switch storageType {
 		case "all":

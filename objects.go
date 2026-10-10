@@ -1,63 +1,18 @@
 package main
 
-// --- Unified Object Model ---
+// --- Typed identifiers and shared types ---
 //
-// These types define the stable handles that flow between MCP tools.
-// The goal is: tool A's output can be directly used as tool B's input,
-// without the agent guessing which map[string]any fields are relevant.
-//
-// Design principles:
-//   - Handles are opaque strings (IDs), not full objects.
-//   - Each handle has a clear lifecycle: created, valid, stale, gone.
-//   - Tools accept handles where possible, not raw coordinates or selectors.
-//   - When a handle is stale, tools return ErrStaleReference, not silent re-match.
-
-// --- Handle types ---
-//
-// These are typed strings to prevent accidental cross-use.
-// They are JSON-serialized as plain strings.
-
-// TargetID identifies a browser tab/target. Stable across URL changes
-// within the same tab. Becomes invalid when the tab is closed or Chrome
-// restarts. Primary key for all target-scoped operations.
-type TargetID string
-
-// SnapshotID identifies a page snapshot at a point in time. Used to detect
-// stale element references: if the page has changed since the snapshot,
-// element refs from that snapshot are invalid.
-// Format: "<targetID>:<generation>" where generation increments on navigation
-// or significant DOM mutation.
-type SnapshotID string
-
-// ElementRef is a CSS selector or snapshot-relative reference to a DOM element.
-// When derived from a snapshot, it includes the snapshot generation so stale
-// refs can be detected. When passed as a raw CSS selector, generation is 0.
-// Format: "<selector>" or "<selector>@<generation>"
-type ElementRef string
+// Opaque string types for the IDs that flow between MCP tools and the
+// flight recorder. Typed so they cannot be silently cross-assigned.
 
 // ActionID identifies a recorded agent action (click, type, navigate, etc.).
 // Used to correlate events (console, network, exceptions) with the action
-// that triggered them. Format: "act_<counter>" or "act_<uuid>".
+// that triggered them. Format: "act_<counter>".
 type ActionID string
 
 // EventID identifies a recorded browser event (console message, network
-// request, exception, navigation). Used to reference specific events in
-// trace exports and source location lookups.
+// request, exception, navigation). Format: "evt_<counter>".
 type EventID string
-
-// TraceID identifies a trace export. Used to reference a packaged set of
-// evidence (screenshots, console logs, network requests, DOM snapshots)
-// associated with a debugging session or failed test.
-type TraceID string
-
-// ArtifactID identifies a stored artifact (screenshot file, PDF, trace
-// bundle). Used to read artifact contents without passing full binary data
-// through MCP.
-type ArtifactID string
-
-// SessionID identifies an MCP client session. Reserved for future multi-
-// session isolation. Currently there is one implicit session.
-type SessionID string
 
 // ConnectionEpoch identifies a connection generation for a target.
 //
@@ -80,19 +35,6 @@ type SessionID string
 // Format: "epoch_<counter>".
 type ConnectionEpoch string
 
-// --- Source location ---
-
-// SourceLocation maps a browser runtime location (stack frame, error,
-// CSS rule) to a workspace source file. Produced by source map resolution.
-type SourceLocation struct {
-	Path       string  `json:"path"`               // workspace-relative source file path
-	Line       int     `json:"line"`               // 1-based line number
-	Column     int     `json:"column"`             // 0-based column number
-	Function   string  `json:"function,omitempty"` // function name, if known
-	Confidence float64 `json:"confidence"`         // 0.0–1.0, how certain the mapping is
-	Source     string  `json:"source,omitempty"`   // source map URL or script URL
-}
-
 // --- Error categories ---
 //
 // Stable error codes that agents can branch on. Every tool error should
@@ -112,8 +54,8 @@ const (
 	ErrUnsupported         ErrorCode = "unsupported"          // feature not available in this browser/mode
 )
 
-// ToolError is the structured error returned by MCP tools.
-// It wraps the error code with context for agent consumption.
+// ToolError is the structured error recorded on action records and
+// returned by MCP tools where a plain error string would be ambiguous.
 type ToolError struct {
 	Code      ErrorCode `json:"code"`
 	Op        string    `json:"op"` // operation name, e.g. "click", "navigate"
@@ -140,10 +82,9 @@ func (e *ToolError) Error() string {
 // they need. This reduces context window usage and selection cost.
 //
 // Current sets:
-//   core:     target + observe + act + wait (minimum for browser control)
 //   default:  compact interaction loop (configure/status/snapshot/click/fill/
 //             navigate/eval/screenshot/find/get_element/wait_for/exists/
-//             tool_summary). What agents see by default.
+//             tool_summary). Always enabled.
 //   core:     full internal core (all target/observe/act/wait/navigate/
 //             emulate/storage tools). Use --toolsets=core to enable.
 //   diagnose: network + trace (evidence collection)
@@ -170,7 +111,3 @@ type ToolMeta struct {
 	Idempotent  bool          `json:"idempotent"`             // can be safely retried with same params?
 	Description string        `json:"description,omitempty"`  // one-line summary for tool discovery
 }
-
-// toolRegistry tracks all registered tools with their metadata.
-// Used for capability filtering and tool audit.
-var toolRegistry = []ToolMeta{}

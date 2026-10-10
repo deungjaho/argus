@@ -13,13 +13,18 @@ import (
 )
 
 type interceptInput struct {
-	URLPattern string            `json:"url_pattern"`
+	URLPattern string            `json:"url_pattern,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Pattern    string            `json:"pattern,omitempty"`
 	Method     string            `json:"method,omitempty"`
 	Status     int               `json:"status,omitempty"`
 	Body       string            `json:"body,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
 	Action     string            `json:"action,omitempty"` // mock | block | passthrough
 	Remove     bool              `json:"remove,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	TargetID   string            `json:"target_id,omitempty"`
+	TabID      string            `json:"tab_id,omitempty"`
 }
 
 type interceptRule struct {
@@ -38,6 +43,7 @@ type interceptState struct {
 	mu           sync.Mutex
 	rules        []interceptRule
 	active       bool               // whether Fetch.enable has been called
+	conn         *cdpConn           // conn the listener/Fetch.enable is bound to
 	sub          *eventSubscription // hub subscription for Fetch.requestPaused
 	stopCh       chan struct{}      // closed to stop listener goroutine
 	listenerDone chan struct{}      // closed when listener goroutine exits
@@ -54,13 +60,15 @@ func getInterceptState(wsURL string) *interceptState {
 	if s, ok := interceptTargets[wsURL]; ok {
 		return s
 	}
-	s := &interceptState{stopCh: make(chan struct{}), listenerDone: make(chan struct{})}
-	// listenerDone is closed when listener exits; pre-close if no listener running
-	// Actually, we'll use a nil check on sub to determine if listener is running
+	s := &interceptState{}
 	interceptTargets[wsURL] = s
 	return s
 }
 
+// removeInterceptState drops a target's rules and stops its listener.
+// If a rearm raced us onto a fresh live conn, Fetch.disable is sent on
+// that conn directly (not via the pool) so paused requests cannot hang
+// with no responder.
 func removeInterceptState(wsURL string) {
 	interceptTargetsMu.Lock()
 	s, ok := interceptTargets[wsURL]
@@ -68,14 +76,49 @@ func removeInterceptState(wsURL string) {
 		delete(interceptTargets, wsURL)
 	}
 	interceptTargetsMu.Unlock()
-	if ok && s.sub != nil {
-		// Stop listener and unsubscribe
-		select {
-		case <-s.stopCh:
-		default:
-			close(s.stopCh)
-		}
+	if !ok {
+		return
 	}
+	s.mu.Lock()
+	conn := s.conn
+	wasActive := s.active
+	s.active = false
+	stopInterceptListener(s, wsURL)
+	s.mu.Unlock()
+	if wasActive && conn != nil && conn.alive() {
+		_ = conn.call("Fetch.disable", map[string]any{}, nil, 3*time.Second)
+	}
+}
+
+// rearmInterceptState restores Fetch interception on a freshly dialed page
+// connection. Without this, rules silently stop working after a reconnect:
+// the old subscription died with the old hub and Fetch.enable was bound to
+// the dead connection. Called from getConn after the pool entry is set —
+// never call it while holding state.mu acquired from a cdpRequest path.
+func rearmInterceptState(conn *cdpConn, wsURL string) {
+	interceptTargetsMu.Lock()
+	state, ok := interceptTargets[wsURL]
+	interceptTargetsMu.Unlock()
+	if !ok {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	stopInterceptListener(state, wsURL) // stop stale listener if one survived
+	state.active = false
+	if len(state.rules) == 0 {
+		return
+	}
+	if err := conn.call("Fetch.enable", map[string]any{
+		"patterns": []map[string]any{
+			{"urlPattern": "*", "requestStage": "Request"},
+		},
+	}, nil, 10*time.Second); err != nil {
+		logWarn("intercept: Fetch re-enable after reconnect failed: %v", err)
+		return
+	}
+	state.active = true
+	armInterceptListener(state, conn, wsURL)
 }
 
 func registerInterceptTools(server *mcp.Server) {
@@ -86,14 +129,18 @@ func registerInterceptTools(server *mcp.Server) {
 		rec := BeginAction("intercept")
 		defer rec.End()
 
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
+		pattern := resolveFirstNonEmpty(input.URLPattern, input.URL, input.Pattern)
+		input.URLPattern = pattern
 		rec.SetParams(input)
-		pattern := strings.TrimSpace(input.URLPattern)
 		if pattern == "" {
 			rec.SetErrorFromError(fmt.Errorf("intercept requires url_pattern"))
 			return nil, nil, fmt.Errorf("intercept requires url_pattern")
@@ -169,7 +216,10 @@ func registerInterceptTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "list_intercepts",
 		Description: "List all active network interception rules for the current tab.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noInput) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tabScopeInput) (*mcp.CallToolResult, any, error) {
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
@@ -192,10 +242,13 @@ func registerInterceptTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "clear_intercepts",
 		Description: "Remove all network interception rules for the current tab and disable request interception.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input noInput) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tabScopeInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("clear_intercepts")
 		defer rec.End()
 
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
 		ws, err := requireTargetWS()
 		if err != nil {
 			rec.SetErrorFromError(err)
@@ -221,6 +274,8 @@ func registerInterceptTools(server *mcp.Server) {
 	})
 }
 
+// startInterceptListener dials (or reuses) the pooled conn and arms the
+// listener. Called with state.mu held.
 func startInterceptListener(state *interceptState, wsURL string) {
 	if state.sub != nil {
 		return // already running
@@ -230,30 +285,43 @@ func startInterceptListener(state *interceptState, wsURL string) {
 		logWarn("intercept: failed to get connection for listener: %v", err)
 		return
 	}
-	state.stopCh = make(chan struct{})
-	state.listenerDone = make(chan struct{})
-	state.sub = conn.subscribeEvents("intercept", 64, true) // critical: Fetch.requestPaused must not be dropped
-	go runInterceptListener(state, wsURL)
+	armInterceptListener(state, conn, wsURL)
 }
 
+// armInterceptListener subscribes on conn and spawns the listener.
+// Called with state.mu held.
+func armInterceptListener(state *interceptState, conn *cdpConn, wsURL string) {
+	state.conn = conn
+	state.stopCh = make(chan struct{})
+	state.listenerDone = make(chan struct{})
+	// critical: Fetch.requestPaused must not be dropped
+	state.sub = conn.subscribeEvents("intercept", 64, true)
+	go runInterceptListener(state, wsURL, state.sub, state.stopCh, state.listenerDone)
+}
+
+// stopInterceptListener is called with state.mu held.
 func stopInterceptListener(state *interceptState, wsURL string) {
-	if state.sub == nil {
+	sub := state.sub
+	state.conn = nil
+	if sub == nil {
 		return
 	}
+	state.sub = nil
+	stopCh, doneCh := state.stopCh, state.listenerDone
 	select {
-	case <-state.stopCh:
+	case <-stopCh:
 		// already closed
 	default:
-		close(state.stopCh)
+		close(stopCh)
 	}
 	// Unsubscribe from hub so events stop flowing
-	state.sub.hub.unsubscribe(state.sub)
-	// Wait for listener to exit (with timeout)
+	sub.hub.unsubscribe(sub)
+	// Wait for listener to exit (with timeout; the listener may be inside
+	// handleRequestPaused which needs state.mu — do not hold it longer).
 	select {
-	case <-state.listenerDone:
+	case <-doneCh:
 	case <-listenerWaitTimeout():
 	}
-	state.sub = nil
 }
 
 func listenerWaitTimeout() <-chan time.Time {
@@ -265,21 +333,21 @@ func listenerWaitTimeout() <-chan time.Time {
 // Exits cleanly when the subscription channel closes or stopCh is closed.
 // Uses fail-open: if cdpRequest to continue/fulfill/fail fails, the request
 // is allowed to proceed (better than hanging forever).
-func runInterceptListener(state *interceptState, wsURL string) {
+func runInterceptListener(state *interceptState, wsURL string, sub *eventSubscription, stopCh chan struct{}, doneCh chan struct{}) {
 	log := NewLogger("intercept:" + shortID(wsURL))
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("listener panic: %v", r)
 		}
-		close(state.listenerDone)
+		close(doneCh)
 		log.Debug("listener exited")
 	}()
 
 	for {
 		select {
-		case <-state.stopCh:
+		case <-stopCh:
 			return
-		case envelope, ok := <-state.sub.ch:
+		case envelope, ok := <-sub.ch:
 			if !ok {
 				// Hub closed (connection death or shutdown)
 				return

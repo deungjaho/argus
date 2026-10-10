@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,9 +10,10 @@ import (
 
 // autoWaitOptions controls auto-wait behavior for interaction tools.
 type autoWaitOptions struct {
-	TimeoutMs int  // max time to wait for element; 0 = use default
-	PollMs    int  // poll interval; 0 = use default
-	NoWait    bool // skip auto-wait entirely
+	TimeoutMs  int    // max time to wait for element; 0 = use default
+	PollMs     int    // poll interval; 0 = use default
+	NoWait     bool   // skip auto-wait entirely
+	ExpectMark string // element must carry this data-argus-m mark (from a stored snapshot); mismatch = stale ref
 }
 
 const (
@@ -33,7 +35,7 @@ func autoWaitForElement(ctx context.Context, ws, selector, text string, opts aut
 		poll = defaultAutoWaitPoll
 	}
 	if opts.NoWait {
-		return resolveElementPoint(ws, selector, text)
+		return resolveElementPoint(ws, selector, text, opts.ExpectMark)
 	}
 	deadline := time.Now().Add(time.Duration(timeout) * time.Millisecond)
 	pollDuration := time.Duration(poll) * time.Millisecond
@@ -43,7 +45,10 @@ func autoWaitForElement(ctx context.Context, ws, selector, text string, opts aut
 			return 0, 0, nil, fmt.Errorf("auto-wait cancelled: %w", ctx.Err())
 		default:
 		}
-		x, y, info, err := resolveElementPointWithState(ws, selector, text)
+		x, y, info, err := resolveElementPointWithState(ws, selector, text, opts.ExpectMark)
+		if errors.Is(err, errStaleRef) {
+			return 0, 0, info, err // stale is terminal — the mark can't come back
+		}
 		if err == nil && info != nil {
 			if visible, _ := info["visible"].(bool); visible {
 				if enabled, ok := info["enabled"].(bool); !ok || enabled {
@@ -71,10 +76,10 @@ func autoWaitForElement(ctx context.Context, ws, selector, text string, opts aut
 }
 
 // resolveElementPoint resolves an element to viewport coordinates without waiting.
-func resolveElementPoint(ws, selector, text string) (float64, float64, map[string]any, error) {
-	x, y, info, err := resolveElementPointWithState(ws, selector, text)
+func resolveElementPoint(ws, selector, text, expectMark string) (float64, float64, map[string]any, error) {
+	x, y, info, err := resolveElementPointWithState(ws, selector, text, expectMark)
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, info, err
 	}
 	if info == nil {
 		return 0, 0, nil, fmt.Errorf("element not found")
@@ -83,19 +88,25 @@ func resolveElementPoint(ws, selector, text string) (float64, float64, map[strin
 }
 
 // resolveElementPointWithState resolves an element and returns its state (visible, enabled, rect).
-func resolveElementPointWithState(ws, selector, text string) (float64, float64, map[string]any, error) {
+// When expectMark is non-empty, a resolved element whose data-argus-m
+// mark differs is reported stale — it is a different DOM node than the
+// one the snapshot's ref pointed at.
+func resolveElementPointWithState(ws, selector, text, expectMark string) (float64, float64, map[string]any, error) {
 	selector = strings.TrimSpace(selector)
 	text = strings.TrimSpace(text)
 	if selector == "" && text == "" {
 		return 0, 0, nil, fmt.Errorf("no selector or text provided")
 	}
-	value, err := cdpEvaluate(ws, elementStateExpression(selector, text), true)
+	value, err := cdpEvaluate(ws, elementStateExpression(selector, text, expectMark), true)
 	if err != nil {
 		return 0, 0, nil, err
 	}
 	info, ok := value.(map[string]any)
 	if !ok || info == nil {
 		return 0, 0, nil, fmt.Errorf("element not found")
+	}
+	if stale, _ := info["stale"].(bool); stale {
+		return 0, 0, info, fmt.Errorf("%w: element was re-created since the snapshot; call snapshot or look again for a fresh ref", errStaleRef)
 	}
 	if found, _ := info["found"].(bool); !found {
 		return 0, 0, info, fmt.Errorf("element not found")
@@ -108,10 +119,11 @@ func resolveElementPointWithState(ws, selector, text string) (float64, float64, 
 	return x, y, info, nil
 }
 
-func elementStateExpression(selector, text string) string {
+func elementStateExpression(selector, text, expectMark string) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const text = %s;
+const expectMark = %s;
 const visible = (el) => {
   if (!el) return false;
   const style = getComputedStyle(el);
@@ -125,16 +137,21 @@ const enabled = (el) => {
   return true;
 };
 let el = null;
-if (selector) el = document.querySelector(selector);
-if (!el && text) {
-  const needle = text.toLowerCase();
-  const candidates = Array.from(document.querySelectorAll('a,button,input,textarea,select,summary,[role],[tabindex],[aria-label],[data-testid],[data-test-id],label,span,div'));
-  el = candidates.find(node => {
-    const nodeText = ((node.innerText || '') + ' ' + (node.getAttribute('aria-label') || '') + ' ' + (node.getAttribute('placeholder') || '') + ' ' + (node.getAttribute('title') || '')).toLowerCase();
-    return nodeText.includes(needle);
-  });
+if (selector) {
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    el = document.getElementById(selector) ||
+         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
+         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
+  }
 }
+`+rankedTextMatchJS+`
 if (!el) return {found: false, visible: false, enabled: false};
+if (expectMark && el.getAttribute('data-argus-m') !== expectMark) {
+  return {found: false, stale: true, tag: el.localName};
+}
 el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
 const rect = el.getBoundingClientRect();
 return {
@@ -147,7 +164,7 @@ return {
   y: Math.max(0, Math.min(innerHeight - 1, rect.top + rect.height / 2)),
   rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
 };
-})()`, jsString(selector), jsString(text))
+})()`, jsString(selector), jsString(text), jsString(expectMark))
 }
 
 // autoWaitForSelector polls until a CSS selector matches at least one visible element.

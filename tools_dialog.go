@@ -11,14 +11,22 @@ import (
 )
 
 type handleDialogInput struct {
-	Accept     bool   `json:"accept"`
+	Accept     bool   `json:"accept,omitempty"`
 	PromptText string `json:"prompt_text,omitempty"`
+	Action     string `json:"action,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
 }
 
 type uploadFileInput struct {
 	Ref      string   `json:"ref,omitempty"`
 	Selector string   `json:"selector,omitempty"`
-	Paths    []string `json:"paths"`
+	Target   string   `json:"target,omitempty"`
+	CSS      string   `json:"css,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Path     string   `json:"path,omitempty"`
+	Files    []string `json:"files,omitempty"`
+	File     string   `json:"file,omitempty"`
 }
 
 func registerDialogTools(server *mcp.Server) {
@@ -36,16 +44,25 @@ func registerDialogTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
-		params := map[string]any{"accept": input.Accept}
-		if strings.TrimSpace(input.PromptText) != "" {
-			params["promptText"] = input.PromptText
+		accept := input.Accept
+		if action := strings.ToLower(strings.TrimSpace(input.Action)); action != "" {
+			if action == "accept" || action == "ok" || action == "yes" {
+				accept = true
+			} else if action == "dismiss" || action == "cancel" || action == "no" {
+				accept = false
+			}
+		}
+		promptText := resolveFirstNonEmpty(input.PromptText, input.Text, input.Prompt)
+		params := map[string]any{"accept": accept}
+		if promptText != "" {
+			params["promptText"] = promptText
 		}
 		if err := cdpRequest(ws, "Page.handleJavaScriptDialog", params, nil); err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"handled": true, "accepted": input.Accept, "action_id": string(rec.ID)})
-		return nil, map[string]any{"handled": true, "accepted": input.Accept, "action_id": string(rec.ID)}, nil
+		rec.SetResult(map[string]any{"handled": true, "accepted": accept, "action_id": string(rec.ID)})
+		return nil, map[string]any{"handled": true, "accepted": accept, "action_id": string(rec.ID)}, nil
 	})
 
 	addTool(server, &mcp.Tool{
@@ -62,19 +79,28 @@ func registerDialogTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		rec.SetTarget(getCurrentTargetID())
-		selector := firstNonEmpty(strings.TrimSpace(input.Ref), strings.TrimSpace(input.Selector))
+		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, "", "")
 		if selector == "" {
 			rec.SetErrorFromError(fmt.Errorf("upload_file requires ref or selector"))
 			return nil, nil, fmt.Errorf("upload_file requires ref or selector")
 		}
-		if len(input.Paths) == 0 {
+		paths := input.Paths
+		if len(paths) == 0 && len(input.Files) > 0 {
+			paths = input.Files
+		}
+		if len(paths) == 0 {
+			if p := resolveFirstNonEmpty(input.Path, input.File); p != "" {
+				paths = []string{p}
+			}
+		}
+		if len(paths) == 0 {
 			rec.SetErrorFromError(fmt.Errorf("upload_file requires paths"))
 			return nil, nil, fmt.Errorf("upload_file requires paths")
 		}
 		// Canonicalize and validate file paths to prevent path traversal.
 		// Each path must resolve to an existing file after symlink resolution.
-		canonicalPaths := make([]string, 0, len(input.Paths))
-		for _, p := range input.Paths {
+		canonicalPaths := make([]string, 0, len(paths))
+		for _, p := range paths {
 			abs, err := filepath.Abs(p)
 			if err != nil {
 				rec.SetErrorFromError(fmt.Errorf("cannot resolve path %q: %w", p, err))

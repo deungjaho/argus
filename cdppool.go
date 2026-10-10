@@ -53,11 +53,11 @@ var (
 // Dead connections are removed from the pool and replaced.
 func getConn(wsURL string) (*cdpConn, error) {
 	poolMu.Lock()
-	defer poolMu.Unlock()
 
 	// Check for existing alive connection
 	if conn, ok := pool[wsURL]; ok {
 		if conn.alive() {
+			poolMu.Unlock()
 			return conn, nil
 		}
 		// Dead connection — remove it from pool
@@ -67,9 +67,14 @@ func getConn(wsURL string) (*cdpConn, error) {
 	// Create new connection
 	conn, err := dialConn(wsURL)
 	if err != nil {
+		poolMu.Unlock()
 		return nil, err
 	}
 	pool[wsURL] = conn
+	poolMu.Unlock()
+	if isPageEndpoint(wsURL) {
+		rearmInterceptState(conn, wsURL)
+	}
 	return conn, nil
 }
 
@@ -285,18 +290,30 @@ func closeConn(wsURL string) {
 	if ok {
 		conn.close()
 	}
+	if isPageEndpoint(wsURL) {
+		removeInterceptState(wsURL)
+	}
 }
 
-// closeAllConns closes all pooled connections (used on shutdown).
+// closeAllConns closes all pooled connections (used on shutdown and the
+// Chrome crash path) and drops their intercept state — dead targets' rules
+// must not linger in interceptTargets.
 func closeAllConns() {
 	poolMu.Lock()
 	conns := make([]*cdpConn, 0, len(pool))
+	urls := make([]string, 0, len(pool))
 	for url, conn := range pool {
 		conns = append(conns, conn)
+		urls = append(urls, url)
 		delete(pool, url)
 	}
 	poolMu.Unlock()
 	for _, conn := range conns {
 		conn.close()
+	}
+	for _, url := range urls {
+		if isPageEndpoint(url) {
+			removeInterceptState(url)
+		}
 	}
 }

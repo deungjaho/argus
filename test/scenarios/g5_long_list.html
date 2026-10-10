@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>G5: Long List and Complex DOM Exploration</title>
+  <style>
+    .list-container {
+      height: 400px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+    }
+    .list-item {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+    }
+    .active { color: green; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Virtual Long List (120 Items)</h2>
+  <div id="selected-item">none</div>
+
+  <div class="list-container" id="container">
+    <!-- Populated by script -->
+  </div>
+
+  <script>
+    const container = document.getElementById('container');
+    for (let i = 1; i <= 120; i++) {
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      item.id = 'row-' + i;
+
+      const span = document.createElement('span');
+      span.textContent = 'Record #' + i + ' (Status: Active)';
+      item.appendChild(span);
+
+      const btn = document.createElement('button');
+      btn.className = 'inspect-btn';
+      btn.id = 'btn-item-' + i;
+      btn.textContent = (i === 50) ? 'Special Target 50' : 'Inspect #' + i;
+      btn.onclick = () => {
+        document.getElementById('selected-item').textContent = 'item_' + i;
+      };
+      item.appendChild(btn);
+
+      container.appendChild(item);
+    }
+  </script>
+</body>
+</html>

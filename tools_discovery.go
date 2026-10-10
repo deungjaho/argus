@@ -12,7 +12,10 @@ import (
 // toolSummaryInput is the input for the tool_summary discovery tool.
 type toolSummaryInput struct {
 	Capability string `json:"capability,omitempty"` // filter: core, diagnose, debug, full (default: all)
-	Verbose    bool   `json:"verbose,omitempty"`    // include full side_effects and descriptions
+	Filter     string `json:"filter,omitempty"`
+	Toolset    string `json:"toolset,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Verbose    bool   `json:"verbose,omitempty"` // include full side_effects and descriptions
 }
 
 // toolSummaryRow is one row of the compact discovery table.
@@ -45,7 +48,8 @@ func registerDiscoveryTools(server *mcp.Server) {
 		Name:        "tool_summary",
 		Description: "Return a compact, categorized list of all registered tools with capability, sensitivity, idempotency, and side effects. Pass capability=core to filter. Pass verbose=true for full side_effects and one-line descriptions.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input toolSummaryInput) (*mcp.CallToolResult, any, error) {
-		return nil, buildToolSummary(input.Capability, input.Verbose), nil
+		cap := resolveFirstNonEmpty(input.Capability, input.Filter, input.Toolset, input.Group)
+		return nil, buildToolSummary(cap, input.Verbose), nil
 	})
 }
 
