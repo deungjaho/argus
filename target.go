@@ -107,6 +107,9 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 	// 0. Explicit targetID given (isolated lookup, no mutation of global active target)
 	if targetID != "" {
 		if target := findTargetByID(targets, targetID); target != nil {
+			if target.URL != "" {
+				rec.SetCurrentURL(target.ID, target.URL)
+			}
 			return target, nil
 		}
 		return nil, fmt.Errorf("target %s not found (tab closed or invalid ID)", targetID)
@@ -115,6 +118,9 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 	// 1. Try targetID first (stable identity)
 	if id := getCurrentTargetID(); id != "" {
 		if target := findTargetByID(targets, id); target != nil {
+			if target.URL != "" {
+				rec.SetCurrentURL(target.ID, target.URL)
+			}
 			return target, nil
 		}
 		// Target disappeared — clear stale ID
@@ -129,6 +135,9 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 	}
 	if target := findTargetByURL(targets, url); target != nil {
 		setCurrentTargetID(target.ID)
+		if target.URL != "" {
+			rec.SetCurrentURL(target.ID, target.URL)
+		}
 		return target, nil
 	}
 

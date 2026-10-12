@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -66,9 +70,118 @@ type browserRuntimeExceptionDetails struct {
 
 // --- CDP HTTP endpoints ---
 
-// cdpHTTPClient is used for all CDP HTTP requests with a timeout.
-// No CDP HTTP call should ever hang indefinitely.
-var cdpHTTPClient = &http.Client{Timeout: 5 * time.Second}
+// isAnti9224BarrierActive reports whether the anti-9224 security barrier is active.
+// Active in test mode (testing.Testing()) or when explicitly requested via env.
+func isAnti9224BarrierActive() bool {
+	if testing.Testing() {
+		return true
+	}
+	if os.Getenv("ARGUS_STRICT_ISOLATION") == "1" || os.Getenv("ARGUS_FORBID_PORT_9224") == "1" {
+		return true
+	}
+	return false
+}
+
+var (
+	portColonRegex   = regexp.MustCompile(`:([0-9]+)`)
+	ipv6BracketRegex = regexp.MustCompile(`\[.*?\]`)
+)
+
+func isPort9224Target(target string, ports ...int) bool {
+	for _, p := range ports {
+		if p == 9224 {
+			return true
+		}
+	}
+
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return false
+	}
+
+	// Direct numeric string check (e.g. "9224", "09224", "009224")
+	if p, err := strconv.Atoi(trimmed); err == nil && p == 9224 {
+		return true
+	}
+
+	// 1. If target has a scheme (http://, https://, ws://, wss://, tcp://, etc.), parse via url.Parse
+	if strings.Contains(trimmed, "://") {
+		if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+			if portStr := u.Port(); portStr != "" {
+				if p, err := strconv.Atoi(portStr); err == nil && p == 9224 {
+					return true
+				}
+				// Explicitly targets a non-9224 port
+				return false
+			}
+			// Default scheme ports (80, 443) are not 9224
+			return false
+		}
+	}
+
+	// 2. Try net.SplitHostPort (covers host:port, [ipv6]:port, :port)
+	if _, portStr, err := net.SplitHostPort(trimmed); err == nil {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			if p == 9224 {
+				return true
+			}
+			return false
+		}
+	}
+
+	// 3. Schemeless target with path/query (e.g. "127.0.0.1:09224/json/version")
+	if u, err := url.Parse("http://" + trimmed); err == nil && u.Host != "" {
+		if portStr := u.Port(); portStr != "" {
+			if p, err := strconv.Atoi(portStr); err == nil && p == 9224 {
+				return true
+			}
+			return false
+		}
+	}
+
+	// 4. Fallback: extract any :<digits> outside IPv6 brackets
+	cleaned := ipv6BracketRegex.ReplaceAllString(trimmed, "")
+	for _, m := range portColonRegex.FindAllStringSubmatch(cleaned, -1) {
+		if len(m) > 1 {
+			if p, err := strconv.Atoi(m[1]); err == nil && p == 9224 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// assertNotPort9224 panics immediately if host port 9224 is targeted during tests.
+func assertNotPort9224(target string, ports ...int) {
+	if !isAnti9224BarrierActive() {
+		return
+	}
+	if isPort9224Target(target, ports...) {
+		panic(fmt.Sprintf("CRITICAL SAFETY VIOLATION: Anti-9224 barrier triggered: test attempted connection to forbidden host CDP port 9224 (target=%s, ports=%v)", target, ports))
+	}
+}
+
+type anti9224Transport struct {
+	base http.RoundTripper
+}
+
+func (t *anti9224Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req != nil && req.URL != nil {
+		assertNotPort9224(req.URL.String())
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
+// cdpHTTPClient is used for all CDP HTTP requests with a timeout and Anti-9224 barrier.
+var cdpHTTPClient = &http.Client{
+	Timeout:   5 * time.Second,
+	Transport: &anti9224Transport{base: http.DefaultTransport},
+}
 
 func cdpVersion() (browserCDPVersionInfo, error) {
 	resp, err := cdpHTTPClient.Get(cdpBaseURL() + "/json/version")
@@ -145,6 +258,13 @@ func cdpEvaluate(pageWSURL, expression string, awaitPromise bool) (any, error) {
 }
 
 func cdpEvaluateTimeout(pageWSURL, expression string, awaitPromise bool, timeout time.Duration) (any, error) {
+	if isPageEndpoint(pageWSURL) {
+		targetID := targetIDFromWSURL(pageWSURL)
+		if dialogMgr.HasPendingDialog(targetID) {
+			d := dialogMgr.GetPendingDialog(targetID)
+			return nil, fmt.Errorf("cannot evaluate JavaScript: dialog '%s' is open (%q); accept or dismiss with handle_dialog first", d.Type, d.Message)
+		}
+	}
 	var result browserRuntimeEvaluateResult
 	if err := cdpRequestTimeout(pageWSURL, "Runtime.evaluate", map[string]any{
 		"expression":    expression,
@@ -265,15 +385,37 @@ func cdpPageNavigate(pageWSURL, url string, loadTimeout time.Duration) (map[stri
 	}
 }
 
-func cdpCaptureScreenshot(pageWSURL string, fullPage bool) ([]byte, error) {
+// ScreenshotClip defines the clipping bounding box for Page.captureScreenshot.
+type ScreenshotClip struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Scale  float64 `json:"scale"`
+}
+
+func cdpCaptureScreenshotWithClip(pageWSURL string, fullPage bool, clip *ScreenshotClip) ([]byte, error) {
 	var result struct {
 		Data string `json:"data"`
 	}
 	params := map[string]any{
 		"format": "png",
 	}
-	if fullPage {
+	if fullPage || clip != nil {
 		params["captureBeyondViewport"] = true
+	}
+	if clip != nil {
+		scale := clip.Scale
+		if scale <= 0 {
+			scale = 1.0
+		}
+		params["clip"] = map[string]any{
+			"x":      clip.X,
+			"y":      clip.Y,
+			"width":  clip.Width,
+			"height": clip.Height,
+			"scale":  scale,
+		}
 	}
 	if err := cdpRequest(pageWSURL, "Page.captureScreenshot", params, &result); err != nil {
 		return nil, err
@@ -282,6 +424,10 @@ func cdpCaptureScreenshot(pageWSURL string, fullPage bool) ([]byte, error) {
 		return nil, fmt.Errorf("browser returned an empty screenshot")
 	}
 	return base64.StdEncoding.DecodeString(result.Data)
+}
+
+func cdpCaptureScreenshot(pageWSURL string, fullPage bool) ([]byte, error) {
+	return cdpCaptureScreenshotWithClip(pageWSURL, fullPage, nil)
 }
 
 // --- CDP input dispatch ---
@@ -479,6 +625,7 @@ func pointFromImageCoordinates(pageWSURL string, imageX, imageY, imageWidth, ima
 // --- log collection ---
 
 func collectLogs(ctx context.Context, pageWSURL string, duration time.Duration) (entries []map[string]any, err error) {
+	assertNotPort9224(pageWSURL)
 	defer func() {
 		if r := recover(); r != nil {
 			logWarn("collectLogs panic: %v", r)

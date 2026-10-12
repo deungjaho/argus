@@ -121,11 +121,8 @@ func registerNavigationTools(server *mcp.Server) {
 
 		var fallbackTab bool
 		if attach {
-			if err != nil {
+			if err != nil || target == nil || target.WebSocketDebuggerURL == "" {
 				// No matching tab found or current target is closed/missing.
-				fallbackTab = true
-			} else if target != nil && (target.URL == "about:blank" || target.URL == "") {
-				// Current target is about:blank; open a new tab with the target URL.
 				fallbackTab = true
 			}
 		}

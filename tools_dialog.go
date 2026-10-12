@@ -6,16 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type handleDialogInput struct {
-	Accept     bool   `json:"accept,omitempty"`
+	Accept     *bool  `json:"accept,omitempty"`
 	PromptText string `json:"prompt_text,omitempty"`
 	Action     string `json:"action,omitempty"`
 	Text       string `json:"text,omitempty"`
 	Prompt     string `json:"prompt,omitempty"`
+	Policy     string `json:"policy,omitempty"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	Timeout    int    `json:"timeout,omitempty"`
 }
 
 type uploadFileInput struct {
@@ -32,37 +36,147 @@ type uploadFileInput struct {
 func registerDialogTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "handle_dialog",
-		Description: "Accept or dismiss a JavaScript dialog (alert, confirm, prompt, beforeunload). For prompt dialogs, provide prompt_text.",
+		Description: "Inspect, accept, dismiss, or configure auto-handling for JavaScript dialogs (alert, confirm, prompt, beforeunload). Supports non-blocking queries and anti-deadlock controls.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input handleDialogInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("handle_dialog")
-		defer rec.End()
-		rec.SetParams(input)
+		ar := BeginAction("handle_dialog")
+		defer ar.End()
+		ar.SetParams(input)
 
 		ws, err := requireTargetWS()
 		if err != nil {
-			rec.SetErrorFromError(err)
+			ar.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetTarget(getCurrentTargetID())
-		accept := input.Accept
-		if action := strings.ToLower(strings.TrimSpace(input.Action)); action != "" {
-			if action == "accept" || action == "ok" || action == "yes" {
-				accept = true
-			} else if action == "dismiss" || action == "cancel" || action == "no" {
-				accept = false
+		targetID := getCurrentTargetID()
+		if targetID == "" {
+			targetID = targetIDFromWSURL(ws)
+		}
+		ar.SetTarget(targetID)
+		state := dialogMgr.GetOrCreate(targetID, ws)
+
+		action := strings.ToLower(strings.TrimSpace(input.Action))
+		promptText := resolveFirstNonEmpty(input.PromptText, input.Text, input.Prompt)
+
+		// 1. Status / Inspect query (non-blocking)
+		if action == "status" || action == "inspect" || action == "get" {
+			pending := state.Pending()
+			policy, curPrompt := state.GetPolicy()
+			res := map[string]any{
+				"action_id":   string(ar.ID),
+				"target_id":   targetID,
+				"has_dialog":  pending != nil,
+				"policy":      string(policy),
+				"prompt_text": curPrompt,
+			}
+			if pending != nil {
+				res["dialog"] = pending
+			}
+			if last := state.LastHandled(); last != nil {
+				res["last_dialog"] = last
+			}
+			ar.SetResult(res)
+			return nil, res, nil
+		}
+
+		// 2. Policy configuration
+		if action == "policy" || action == "set_policy" || input.Policy != "" {
+			polStr := strings.ToLower(strings.TrimSpace(resolveFirstNonEmpty(input.Policy, action)))
+			var newPolicy DialogPolicy
+			switch polStr {
+			case "accept", "auto_accept":
+				newPolicy = DialogPolicyAccept
+			case "none", "manual":
+				newPolicy = DialogPolicyNone
+			default:
+				newPolicy = DialogPolicyDismiss
+			}
+			state.SetPolicy(newPolicy, promptText)
+			res := map[string]any{
+				"action_id":      string(ar.ID),
+				"target_id":      targetID,
+				"policy_updated": true,
+				"policy":         string(newPolicy),
+				"prompt_text":    promptText,
+			}
+			ar.SetResult(res)
+			return nil, res, nil
+		}
+
+		// 3. History query
+		if action == "history" {
+			hist := state.History()
+			res := map[string]any{
+				"action_id": string(ar.ID),
+				"target_id": targetID,
+				"history":   hist,
+				"count":     len(hist),
+			}
+			ar.SetResult(res)
+			return nil, res, nil
+		}
+
+		// 4. Accept or Dismiss
+		accept := true
+		if input.Accept != nil {
+			accept = *input.Accept
+		} else if action == "dismiss" || action == "cancel" || action == "no" {
+			accept = false
+		} else if action == "accept" || action == "ok" || action == "yes" {
+			accept = true
+		}
+
+		timeoutMs := resolveTimeout(input.TimeoutMs, input.Timeout)
+		if !state.HasPending() && timeoutMs > 0 {
+			state.DrainNotify()
+			deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+			for !state.HasPending() && time.Now().Before(deadline) {
+				remaining := time.Until(deadline)
+				if remaining <= 0 {
+					break
+				}
+				timer := time.NewTimer(remaining)
+				select {
+				case <-state.notifyCh:
+					timer.Stop()
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					ar.SetErrorFromError(ctx.Err())
+					return nil, nil, ctx.Err()
+				}
 			}
 		}
-		promptText := resolveFirstNonEmpty(input.PromptText, input.Text, input.Prompt)
+
+		pending := state.Pending()
 		params := map[string]any{"accept": accept}
 		if promptText != "" {
 			params["promptText"] = promptText
+		} else if pending != nil && pending.DefaultPrompt != "" {
+			params["promptText"] = pending.DefaultPrompt
 		}
+
 		if err := cdpRequest(ws, "Page.handleJavaScriptDialog", params, nil); err != nil {
-			rec.SetErrorFromError(err)
+			ar.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetResult(map[string]any{"handled": true, "accepted": accept, "action_id": string(rec.ID)})
-		return nil, map[string]any{"handled": true, "accepted": accept, "action_id": string(rec.ID)}, nil
+		state.MarkHandled(accept, promptText, false)
+		rec.RecordEventWithAction("dialog", targetID, ar.ID, "", map[string]any{
+			"status":      "handled",
+			"accepted":    accept,
+			"prompt_text": promptText,
+		})
+
+		res := map[string]any{
+			"action_id": string(ar.ID),
+			"handled":   true,
+			"accepted":  accept,
+			"target_id": targetID,
+		}
+		if pending != nil {
+			res["dialog"] = pending
+		}
+		ar.SetResult(res)
+		return nil, res, nil
 	})
 
 	addTool(server, &mcp.Tool{

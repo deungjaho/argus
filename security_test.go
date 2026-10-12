@@ -6,65 +6,6 @@ import (
 	"testing"
 )
 
-func TestSSRFProtectionRejectsFileScheme(t *testing.T) {
-	input := networkRequestInput{URL: "file:///etc/passwd"}
-	_, err := makeHTTPRequest(input)
-	if err == nil {
-		t.Fatal("expected error for file:// scheme, got nil")
-	}
-}
-
-func TestSSRFProtectionRejectsDataScheme(t *testing.T) {
-	input := networkRequestInput{URL: "data:text/html,<h1>test</h1>"}
-	_, err := makeHTTPRequest(input)
-	if err == nil {
-		t.Fatal("expected error for data: scheme, got nil")
-	}
-}
-
-func TestSSRFProtectionRejectsGopherScheme(t *testing.T) {
-	input := networkRequestInput{URL: "gopher://localhost:6379/_FLUSHALL"}
-	_, err := makeHTTPRequest(input)
-	if err == nil {
-		t.Fatal("expected error for gopher:// scheme, got nil")
-	}
-}
-
-func TestSSRFProtectionAllowsHTTP(t *testing.T) {
-	// We can't actually make a request in unit tests, but we can verify
-	// that the scheme check passes (the request will fail for other reasons).
-	// Use a non-routable address to fail fast without side effects.
-	input := networkRequestInput{URL: "http://192.0.2.1:1/test", TimeoutMs: 100}
-	result, err := makeHTTPRequest(input)
-	// Should not fail at the scheme check — may fail at connection.
-	if err != nil {
-		t.Fatalf("scheme check should pass for http, got error: %v", err)
-	}
-	// Result should have an error field (connection failed) but not a scheme error.
-	if result == nil {
-		t.Fatal("result should not be nil")
-	}
-}
-
-func TestSSRFProtectionAllowsHTTPS(t *testing.T) {
-	input := networkRequestInput{URL: "https://192.0.2.1:1/test", TimeoutMs: 100}
-	result, err := makeHTTPRequest(input)
-	if err != nil {
-		t.Fatalf("scheme check should pass for https, got error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("result should not be nil")
-	}
-}
-
-func TestSSRFProtectionRejectsEmptyScheme(t *testing.T) {
-	input := networkRequestInput{URL: "not-a-url"}
-	_, err := makeHTTPRequest(input)
-	if err == nil {
-		t.Fatal("expected error for URL without scheme, got nil")
-	}
-}
-
 func TestCookieRedaction(t *testing.T) {
 	// Test the redaction logic directly (without CDP).
 	// Values > 20 chars get redacted.

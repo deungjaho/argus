@@ -16,85 +16,44 @@ import (
 // unknown sensitivity (treated as high for safety).
 
 var toolMetaRegistry = []ToolMeta{
-	// --- Target ---
-	// configure and status are in the default interaction loop.
+	// --- Target & Status (Default Loop) ---
 	{Name: "configure", Capability: CapDefault, SideEffects: []string{"launches_chrome", "sets_global_config"}, Sensitivity: "medium", Idempotent: true, Description: "Set target URL/port, attach mode, and profile."},
-	{Name: "new_tab", Capability: CapCore, SideEffects: []string{"creates_tab"}, Sensitivity: "low", Idempotent: false, Description: "Open a new browser tab."},
-	{Name: "list_tabs", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "List open browser tabs."},
-	{Name: "select_tab", Capability: CapCore, SideEffects: []string{"activates_tab"}, Sensitivity: "low", Idempotent: true, Description: "Activate a tab by id or url."},
-	{Name: "close_tab", Capability: CapCore, SideEffects: []string{"closes_tab"}, Sensitivity: "low", Idempotent: true, Description: "Close a browser tab."},
-	{Name: "fork", Capability: CapCore, SideEffects: []string{"creates_tab"}, Sensitivity: "low", Idempotent: false, Description: "Duplicate the current tab into a new tab."},
+	{Name: "status", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return current browser status and page state."},
+	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates", "navigates_history", "reloads_page"}, Sensitivity: "low", Idempotent: true, Description: "Navigate to a URL, go back/forward in history, or reload the current tab."},
 
-	// --- Observe ---
-	// look, snapshot, screenshot, find, get_element are in the default loop.
+	// --- Observe & Perceive (Default Loop & Core) ---
 	{Name: "look", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Compressed screenshot plus interactive element list in one call."},
 	{Name: "snapshot", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return page text and visible interactive elements with refs."},
 	{Name: "a11y_snapshot", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Capture the accessibility tree."},
-	{Name: "screenshot", Capability: CapDefault, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture a viewport screenshot (optional grid overlay)."},
-	{Name: "screenshot_full_page", Capability: CapCore, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture a full-page screenshot."},
-	{Name: "inspect_point", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Inspect the element under a viewport or image coordinate."},
-	{Name: "find", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Search the page for text or regex; returns matching elements."},
-	{Name: "get_element", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Get detailed info about one element (html, attrs, style, box)."},
-	{Name: "diff_snapshot", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Diff current page against a stored snapshot: added/removed/changed elements, URL change, plus evidence since then."},
+	{Name: "screenshot", Capability: CapDefault, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture viewport, element, or full-page screenshot."},
+	{Name: "get_element", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Get detailed info about an element by selector, coordinates, or query."},
 
-	// --- Act ---
-	// click and fill are in the default loop.
+	// --- Act & Interact (Default Loop & Core) ---
 	{Name: "click", Capability: CapDefault, SideEffects: []string{"clicks_element"}, Sensitivity: "low", Idempotent: false, Description: "Click an element by ref/selector/coordinates."},
-	{Name: "type", Capability: CapCore, SideEffects: []string{"types_text", "sends_key"}, Sensitivity: "low", Idempotent: false, Description: "Type text into a focused or selected element, or send a keyboard key."},
-	{Name: "fill", Capability: CapDefault, SideEffects: []string{"fills_form_field", "fills_form_fields", "selects_dropdown"}, Sensitivity: "low", Idempotent: false, Description: "Fill a form field (clears first), fill multiple fields, or select dropdown options."},
-	{Name: "batch_actions", Capability: CapCore, SideEffects: []string{"executes_batch_actions"}, Sensitivity: "low", Idempotent: false, Description: "Execute a sequence of UI interactions (click, fill, type, wait_for, hover, scroll, navigate) in a single turn."},
-	{Name: "scroll", Capability: CapCore, SideEffects: []string{"scrolls_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Scroll the viewport by amount or to an element."},
-	{Name: "hover", Capability: CapCore, SideEffects: []string{"hovers_element"}, Sensitivity: "low", Idempotent: true, Description: "Hover over an element."},
+	{Name: "type", Capability: CapCore, SideEffects: []string{"types_text", "sends_key"}, Sensitivity: "low", Idempotent: false, Description: "Type text into a focused element or dispatch a keyboard key."},
+	{Name: "fill", Capability: CapDefault, SideEffects: []string{"fills_form_field", "fills_form_fields", "selects_dropdown"}, Sensitivity: "low", Idempotent: false, Description: "Fill form fields with controlled component setter and settle wait."},
+	{Name: "scroll", Capability: CapCore, SideEffects: []string{"scrolls_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Scroll the viewport or overflow container."},
+	{Name: "hover", Capability: CapCore, SideEffects: []string{"hovers_element"}, Sensitivity: "low", Idempotent: true, Description: "Hover over an element to trigger pseudo-classes."},
 	{Name: "drag", Capability: CapCore, SideEffects: []string{"drags_element"}, Sensitivity: "low", Idempotent: false, Description: "Drag an element to a target or coordinate."},
+	{Name: "batch_actions", Capability: CapCore, SideEffects: []string{"executes_batch_actions"}, Sensitivity: "low", Idempotent: false, Description: "Execute a sequence of UI interactions in a single turn."},
 	{Name: "upload_file", Capability: CapCore, SideEffects: []string{"uploads_files", "reads_local_file"}, Sensitivity: "medium", Idempotent: false, Description: "Upload local files to a file input."},
-	{Name: "handle_dialog", Capability: CapCore, SideEffects: []string{"handles_dialog"}, Sensitivity: "low", Idempotent: false, Description: "Accept or dismiss a JS dialog (alert/confirm/prompt)."},
-	{Name: "start_recording", Capability: CapCore, SideEffects: []string{"records_user_input"}, Sensitivity: "medium", Idempotent: false, Description: "Record human clicks/fills/keys on the tab for later replay via batch_actions."},
-	{Name: "stop_recording", Capability: CapCore, SideEffects: []string{"writes_recording_file"}, Sensitivity: "medium", Idempotent: true, Description: "Stop recording; returns batch_actions-compatible steps and saves them to disk."},
+	{Name: "handle_dialog", Capability: CapCore, SideEffects: []string{"handles_dialog"}, Sensitivity: "low", Idempotent: false, Description: "Accept or dismiss a JS dialog with anti-deadlock protection."},
 
-	// --- Wait ---
-	// wait_for and exists are in the default loop.
-	{Name: "wait_for", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Wait for a selector/text/condition or page load with timeout."},
-	{Name: "exists", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Check if an element exists (never throws)."},
-	{Name: "try_until", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Retry an action until it succeeds or times out."},
+	// --- Synchronization & State CRUD (Default Loop & Core) ---
+	{Name: "wait_for", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Wait for a selector, text, load, or condition (timeout_ms=0 for instant check)."},
+	{Name: "tab", Capability: CapCore, SideEffects: []string{"creates_tab", "activates_tab", "closes_tab"}, Sensitivity: "low", Idempotent: false, Description: "Browser tab management (list, new, select, close)."},
+	{Name: "storage", Capability: CapCore, SideEffects: []string{"writes_storage", "deletes_storage"}, Sensitivity: "high", Idempotent: false, Description: "Browser storage CRUD for cookies, localStorage, and sessionStorage."},
 
-	// --- Navigate ---
-	// navigate is in the default loop.
-	{Name: "navigate", Capability: CapDefault, SideEffects: []string{"navigates", "navigates_history", "reloads_page"}, Sensitivity: "low", Idempotent: true, Description: "Navigate to a URL, go back/forward in history, or reload the current tab."},
+	// --- Emulate & Execute ---
+	{Name: "emulate", Capability: CapCore, SideEffects: []string{"changes_viewport", "changes_user_agent"}, Sensitivity: "low", Idempotent: true, Description: "Emulate a device viewport and user agent."},
+	{Name: "eval", Capability: CapDefault, SideEffects: []string{"executes_js"}, Sensitivity: "high", Idempotent: false, Description: "Evaluate JavaScript in the page context."},
 
-	// --- Emulate ---
-	{Name: "emulate", Capability: CapCore, SideEffects: []string{"changes_viewport", "changes_user_agent"}, Sensitivity: "low", Idempotent: true, Description: "Emulate a device viewport and user agent, or set a custom viewport size."},
-	// eval is in the default loop (escape hatch for runtime inspection).
-	{Name: "eval", Capability: CapDefault, SideEffects: []string{"executes_js"}, Sensitivity: "high", Idempotent: false, Description: "Evaluate JavaScript in the page (arbitrary code risk)."},
-
-	// --- Network (diagnose) ---
+	// --- Diagnostics (Diagnose Profile) ---
 	{Name: "network_requests", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Query recorded network requests."},
-	{Name: "network_request", Capability: CapDiagnose, SideEffects: []string{"makes_http_request"}, Sensitivity: "high", Idempotent: true, Description: "Issue an HTTP request from the browser."},
 	{Name: "console_messages", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Query recorded console messages."},
-	{Name: "intercept", Capability: CapDiagnose, SideEffects: []string{"intercepts_network"}, Sensitivity: "medium", Idempotent: false, Description: "Add a network interception rule."},
-	{Name: "list_intercepts", Capability: CapDiagnose, Sensitivity: "low", Idempotent: true, Description: "List active interception rules."},
-	{Name: "clear_intercepts", Capability: CapDiagnose, SideEffects: []string{"clears_intercept_rules"}, Sensitivity: "low", Idempotent: true, Description: "Clear all interception rules."},
-
-	// --- Storage ---
-	{Name: "get_storage", Capability: CapCore, Sensitivity: "high", Idempotent: true, Description: "Read cookies/local/session storage (values redacted in debug)."},
-	{Name: "set_storage", Capability: CapCore, SideEffects: []string{"writes_storage"}, Sensitivity: "high", Idempotent: false, Description: "Write cookies/local/session storage."},
-	{Name: "clear_storage", Capability: CapCore, SideEffects: []string{"deletes_storage"}, Sensitivity: "medium", Idempotent: true, Description: "Clear cookies/local/session storage."},
-
-	// --- Misc ---
-	{Name: "pdf", Capability: CapDiagnose, SideEffects: []string{"writes_pdf_file"}, Sensitivity: "low", Idempotent: true, Description: "Export the current page as a PDF."},
-	{Name: "list_downloads", Capability: CapDiagnose, Sensitivity: "low", Idempotent: true, Description: "List files downloaded by the browser."},
-
-	// --- Config ---
-	// status is in the default loop.
-	{Name: "status", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return current browser status and page state."},
-
-	// --- Trace (diagnose) ---
-	{Name: "timeline", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Return the unified action/event timeline."},
-	{Name: "diagnose", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Return a target-scoped diagnostic summary."},
-	{Name: "export_trace", Capability: CapDiagnose, SideEffects: []string{"writes_trace_file"}, Sensitivity: "medium", Idempotent: true, Description: "Export a bounded trace bundle to a controlled file."},
-
-	// --- Discovery ---
-	// tool_summary is in the default loop.
-	{Name: "tool_summary", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Return a compact list of all tools and their capabilities."},
+	{Name: "diagnose", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Diagnostic summary with dev error overlay detection."},
+	{Name: "timeline", Capability: CapDiagnose, Sensitivity: "medium", Idempotent: true, Description: "Chronological event timeline correlating actions and events."},
+	{Name: "mock_route", Capability: CapDiagnose, SideEffects: []string{"intercepts_network", "mocks_routes"}, Sensitivity: "high", Idempotent: false, Description: "Intercept and mock network requests with custom responses."},
 }
 
 // findToolMeta returns the metadata for a tool by name.
@@ -135,8 +94,8 @@ func toolsForCapability(cap CapabilitySet) []string {
 // parseToolsets parses a comma-separated list of capability set names
 // and returns the union of tool names. "full" returns all tools.
 // The "default" set (the compact agent loop) is always included: it
-// contains the discovery and interaction primitives (tool_summary, eval,
-// navigate, click, screenshot, ...) without which an agent cannot operate,
+// contains the discovery and interaction primitives (eval, navigate,
+// click, screenshot, ...) without which an agent cannot operate,
 // so requesting e.g. "core,diagnose" still yields a working tool surface.
 // Example: "core,diagnose" returns default + core + diagnose tools.
 func parseToolsets(s string) []string {

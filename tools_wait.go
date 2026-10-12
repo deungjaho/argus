@@ -10,50 +10,72 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// waitForInput represents parameters for the unified canonical wait tool.
 type waitForInput struct {
-	Text       string `json:"text,omitempty"`
-	TextAbsent string `json:"text_absent,omitempty"`
-	Selector   string `json:"selector,omitempty"`
-	URLMatches string `json:"url_matches,omitempty"`
-	WaitUntil  string `json:"wait_until,omitempty"` // load | domcontentloaded | networkidle
-	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	TimeMs     int    `json:"time_ms,omitempty"`     // sleep/wait duration alias
-	SleepMs    int    `json:"sleep_ms,omitempty"`    // sleep/wait duration alias
-	DurationMs int    `json:"duration_ms,omitempty"` // sleep/wait duration alias
-	PollMs     int    `json:"poll_ms,omitempty"`
-	Ref        string `json:"ref,omitempty"`
-	Target     string `json:"target,omitempty"`
-	CSS        string `json:"css,omitempty"`
-	XPath      string `json:"xpath,omitempty"`
-	Query      string `json:"query,omitempty"`
-	URL        string `json:"url,omitempty"`
-	Timeout    int    `json:"timeout,omitempty"`
-	Delay      int    `json:"delay,omitempty"`
-	DelayMs    int    `json:"delay_ms,omitempty"`
+	Selector         string `json:"selector,omitempty"`    // CSS selector to wait for
+	Text             string `json:"text,omitempty"`        // Text content to wait for
+	TextAbsent       string `json:"text_absent,omitempty"` // Text content to wait to disappear
+	Condition        string `json:"condition,omitempty"`   // JS expression returning truthy (absorbs try_until)
+	Script           string `json:"script,omitempty"`      // alias for condition
+	Expression       string `json:"expression,omitempty"`  // alias for condition
+	Code             string `json:"code,omitempty"`        // alias for condition
+	URLMatches       string `json:"url_matches,omitempty"` // URL pattern to wait for
+	WaitUntil        string `json:"wait_until,omitempty"`  // "load" | "domcontentloaded" | "networkidle"
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`  // Timeout in ms (0 = instant exists check!)
+	Timeout          int    `json:"timeout,omitempty"`     // alias for timeout_ms
+	TimeMs           int    `json:"time_ms,omitempty"`     // sleep duration
+	SleepMs          int    `json:"sleep_ms,omitempty"`    // sleep duration
+	DurationMs       int    `json:"duration_ms,omitempty"` // sleep duration
+	PollMs           int    `json:"poll_ms,omitempty"`     // Polling interval in ms (default: 200ms)
+	Ref              string `json:"ref,omitempty"`         // CSS ref alias
+	Target           string `json:"target,omitempty"`
+	CSS              string `json:"css,omitempty"`
+	XPath            string `json:"xpath,omitempty"`
+	Query            string `json:"query,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Delay            int    `json:"delay,omitempty"`
+	DelayMs          int    `json:"delay_ms,omitempty"`
+	MaxAttempts      int    `json:"max_attempts,omitempty"`
+	TimeoutSpecified bool   `json:"-"`
 }
 
-type tryUntilInput struct {
-	Condition   string `json:"condition,omitempty"`
-	Script      string `json:"script,omitempty"`
-	Expression  string `json:"expression,omitempty"`
-	Code        string `json:"code,omitempty"`
-	TimeoutMs   int    `json:"timeout_ms,omitempty"`
-	Timeout     int    `json:"timeout,omitempty"`
-	PollMs      int    `json:"poll_ms,omitempty"`
-	MaxAttempts int    `json:"max_attempts,omitempty"`
+func (w *waitForInput) UnmarshalJSON(data []byte) error {
+	type alias waitForInput
+	var raw struct {
+		alias
+		RawTimeoutMs *int `json:"timeout_ms"`
+		RawTimeout   *int `json:"timeout"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*w = waitForInput(raw.alias)
+	if raw.RawTimeoutMs != nil {
+		w.TimeoutMs = *raw.RawTimeoutMs
+		w.Timeout = *raw.RawTimeoutMs
+		w.TimeoutSpecified = true
+	} else if raw.RawTimeout != nil {
+		w.Timeout = *raw.RawTimeout
+		w.TimeoutMs = *raw.RawTimeout
+		w.TimeoutSpecified = true
+	}
+	return nil
 }
+
+// Backward-compatibility struct aliases
+type tryUntilInput = waitForInput
+type existsInput = waitForInput
 
 func registerWaitTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "wait_for",
-		Description: "Wait for a page condition (text, selector, url_matches), page load (wait_until: load/networkidle), or sleep (time_ms/delay).",
+		Description: "Wait for element, text, url, page lifecycle (load/networkidle), or custom JS condition. Set timeout_ms=0 for instant existence check without waiting.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
 
-		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
 		input.Selector = resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
 		if input.Selector == "" && input.Text == "" {
 			input.Text = strings.TrimSpace(input.Query)
@@ -62,7 +84,19 @@ func registerWaitTools(server *mcp.Server) {
 			input.URLMatches = strings.TrimSpace(input.URL)
 		}
 
-		// --- Fixed duration sleep / delay fallback ---
+		// 1. Instant Exists Check (timeout_ms == 0 explicitly requested)
+		isInstantExists := input.TimeoutSpecified && input.TimeoutMs == 0 && input.Timeout == 0
+		if isInstantExists && (input.Selector != "" || input.Text != "") {
+			result, err := checkElementExists(ws, input.Selector, input.Text)
+			if err != nil {
+				return nil, nil, err
+			}
+			exists, _ := result["exists"].(bool)
+			result["satisfied"] = exists
+			return nil, result, nil
+		}
+
+		// 2. Fixed Duration Sleep / Delay Fallback
 		sleepMs := input.TimeMs
 		if sleepMs <= 0 {
 			sleepMs = input.SleepMs
@@ -73,9 +107,11 @@ func registerWaitTools(server *mcp.Server) {
 		if sleepMs <= 0 {
 			sleepMs = resolveTimeout(input.DelayMs, input.Delay)
 		}
-		// If agent requested a simple pause, or specified timeout_ms with no conditions:
-		if sleepMs > 0 || (input.TimeoutMs > 0 && input.Text == "" && input.TextAbsent == "" && input.Selector == "" && input.URLMatches == "" && input.WaitUntil == "") {
-			if sleepMs <= 0 {
+		hasNoConditions := input.Text == "" && input.TextAbsent == "" && input.Selector == "" &&
+			input.URLMatches == "" && input.WaitUntil == "" && input.Condition == "" &&
+			input.Script == "" && input.Expression == "" && input.Code == ""
+		if sleepMs > 0 || (hasNoConditions && input.TimeoutMs > 0) {
+			if sleepMs <= 0 && input.TimeoutMs > 0 {
 				sleepMs = input.TimeoutMs
 			}
 			select {
@@ -86,37 +122,80 @@ func registerWaitTools(server *mcp.Server) {
 			}
 		}
 
-		// --- Page load waiting (wait_until) ---
+		// 3. Page Load Lifecycle Waiting (wait_until)
 		if waitUntil := strings.TrimSpace(input.WaitUntil); waitUntil != "" {
-			timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-			if timeout <= 0 {
-				timeout = 15 * time.Second
+			timeoutDuration := 15 * time.Second
+			if input.TimeoutMs > 0 {
+				timeoutDuration = time.Duration(input.TimeoutMs) * time.Millisecond
 			}
-			res, err := waitForPageLoad(ctx, ws, waitUntil, timeout)
+			res, err := waitForPageLoad(ctx, ws, waitUntil, timeoutDuration)
 			return nil, res, err
 		}
 
-		// --- Element condition waiting ---
-		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+		// 4. Polling Condition Evaluation
+		timeoutMsVal := 10000
+		if input.TimeoutMs > 0 {
+			timeoutMsVal = input.TimeoutMs
+		} else if input.Timeout > 0 {
+			timeoutMsVal = input.Timeout
 		}
+		timeout := time.Duration(timeoutMsVal) * time.Millisecond
+
 		poll := time.Duration(input.PollMs) * time.Millisecond
 		if poll <= 0 {
 			poll = 200 * time.Millisecond
 		}
 		deadline := time.Now().Add(timeout)
-		condition := waitForExpression(input)
-		if condition == "" {
-			return nil, nil, fmt.Errorf("wait_for requires text, text_absent, selector, url_matches, or wait_until")
+
+		// Check if condition is a JS expression (absorbs try_until)
+		conditionExpr := resolveFirstNonEmpty(input.Condition, input.Script, input.Expression, input.Code)
+		if conditionExpr != "" {
+			for time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return nil, map[string]any{"satisfied": false, "cancelled": true}, ctx.Err()
+				default:
+				}
+
+				val, err := cdpEvaluate(ws, fmt.Sprintf(`(() => { try { return Boolean(%s); } catch (e) { return false; } })()`, conditionExpr), true)
+				if err == nil {
+					if truthy, ok := val.(bool); ok && truthy {
+						return nil, map[string]any{"satisfied": true, "condition": conditionExpr}, nil
+					}
+				}
+
+				if overlay, _ := checkDevOverlay(ws); overlay != nil && overlay.Detected {
+					return nil, map[string]any{
+						"satisfied":   false,
+						"aborted":     true,
+						"reason":      "dev_overlay_detected",
+						"dev_overlay": overlay,
+					}, fmt.Errorf("wait_for aborted: dev server error overlay detected (%s): %s", overlay.Framework, overlay.Message)
+				}
+
+				select {
+				case <-ctx.Done():
+					return nil, map[string]any{"satisfied": false, "cancelled": true}, ctx.Err()
+				case <-time.After(poll):
+				}
+			}
+			return nil, map[string]any{"satisfied": false, "timed_out": true, "timeout_ms": timeoutMsVal}, nil
 		}
+
+		// Standard Selector / Text / URL Condition
+		evalCond := waitForExpression(input)
+		if evalCond == "" {
+			return nil, nil, fmt.Errorf("wait_for requires selector, text, text_absent, url_matches, condition, or wait_until")
+		}
+
 		for time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
 				return nil, map[string]any{"satisfied": false, "cancelled": true}, ctx.Err()
 			default:
 			}
-			value, err := cdpEvaluate(ws, condition, true)
+
+			value, err := cdpEvaluate(ws, evalCond, true)
 			if err == nil {
 				if result, ok := value.(map[string]any); ok && result != nil {
 					if satisfied, ok := result["satisfied"].(bool); ok && satisfied {
@@ -124,64 +203,24 @@ func registerWaitTools(server *mcp.Server) {
 					}
 				}
 			}
+
+			if overlay, _ := checkDevOverlay(ws); overlay != nil && overlay.Detected {
+				return nil, map[string]any{
+					"satisfied":   false,
+					"aborted":     true,
+					"reason":      "dev_overlay_detected",
+					"dev_overlay": overlay,
+				}, fmt.Errorf("wait_for aborted: dev server error overlay detected (%s): %s (file: %s:%d)",
+					overlay.Framework, overlay.Message, overlay.File, overlay.Line)
+			}
+
 			select {
 			case <-ctx.Done():
 				return nil, map[string]any{"satisfied": false, "cancelled": true}, ctx.Err()
 			case <-time.After(poll):
 			}
 		}
-		return nil, map[string]any{"satisfied": false, "timed_out": true, "timeout_ms": timeout.Milliseconds()}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "try_until",
-		Description: "Poll a JS condition on the page until it returns truthy or timeout. Use this to wait for a condition before calling click/type/fill separately. The condition is a JS expression evaluated on the page.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input tryUntilInput) (*mcp.CallToolResult, any, error) {
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
-		timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 15 * time.Second
-		}
-		poll := time.Duration(input.PollMs) * time.Millisecond
-		if poll <= 0 {
-			poll = 500 * time.Millisecond
-		}
-		condition := resolveFirstNonEmpty(input.Condition, input.Script, input.Expression, input.Code)
-		if condition == "" {
-			return nil, nil, fmt.Errorf("try_until requires a condition (JS expression that returns truthy when satisfied)")
-		}
-		deadline := time.Now().Add(timeout)
-		attempts := 0
-		maxAttempts := input.MaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = 30
-		}
-		var lastResult any
-		for time.Now().Before(deadline) && attempts < maxAttempts {
-			select {
-			case <-ctx.Done():
-				return nil, map[string]any{"satisfied": false, "cancelled": true, "attempts": attempts}, ctx.Err()
-			default:
-			}
-			attempts++
-			value, err := cdpEvaluate(ws, fmt.Sprintf(`(() => { try { return !!(%s); } catch(e) { return false; } })()`, condition), true)
-			if err == nil {
-				if satisfied, ok := value.(bool); ok && satisfied {
-					return nil, map[string]any{"satisfied": true, "attempts": attempts, "last_result": lastResult}, nil
-				}
-				lastResult = value
-			}
-			select {
-			case <-ctx.Done():
-				return nil, map[string]any{"satisfied": false, "cancelled": true, "attempts": attempts}, ctx.Err()
-			case <-time.After(poll):
-			}
-		}
-		return nil, map[string]any{"satisfied": false, "attempts": attempts, "timed_out": time.Now().After(deadline), "last_result": lastResult}, nil
+		return nil, map[string]any{"satisfied": false, "timed_out": true, "timeout_ms": timeoutMsVal}, nil
 	})
 }
 

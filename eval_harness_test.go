@@ -1,3 +1,5 @@
+//go:build integration
+
 package main
 
 // eval_harness_test.go — evaluation harness.

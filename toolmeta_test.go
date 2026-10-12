@@ -5,8 +5,24 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 48 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 48", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 27 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 27", len(toolMetaRegistry))
+	}
+	foundMockRoute := false
+	for _, m := range toolMetaRegistry {
+		if m.Name == "mock_route" {
+			foundMockRoute = true
+			if m.Capability != CapDiagnose {
+				t.Errorf("mock_route capability = %s, want %s", m.Capability, CapDiagnose)
+			}
+			if m.Sensitivity != "high" {
+				t.Errorf("mock_route sensitivity = %s, want high", m.Sensitivity)
+			}
+			break
+		}
+	}
+	if !foundMockRoute {
+		t.Errorf("mock_route missing from toolMetaRegistry")
 	}
 }
 
@@ -22,7 +38,7 @@ func TestToolMetaDefaultLoopIsCompact(t *testing.T) {
 	}
 	t.Logf("default toolset: %d tools: %v", len(defaults), defaults)
 	// Verify the core interaction loop is present.
-	required := []string{"configure", "status", "snapshot", "click", "fill", "navigate", "eval", "screenshot", "find", "get_element", "wait_for", "exists", "tool_summary"}
+	required := []string{"configure", "status", "snapshot", "look", "click", "fill", "navigate", "eval", "screenshot", "get_element", "wait_for"}
 	for _, name := range required {
 		found := false
 		for _, d := range defaults {
@@ -112,13 +128,20 @@ func TestToolsForCapability(t *testing.T) {
 
 	diagnose := toolsForCapability(CapDiagnose)
 	found = false
+	foundMockRoute := false
 	for _, name := range diagnose {
 		if name == "network_requests" {
 			found = true
 		}
+		if name == "mock_route" {
+			foundMockRoute = true
+		}
 	}
 	if !found {
 		t.Error("network_requests should be in diagnose capability")
+	}
+	if !foundMockRoute {
+		t.Error("mock_route should be in diagnose capability")
 	}
 
 	full := toolsForCapability(CapFull)

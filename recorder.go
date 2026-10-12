@@ -53,7 +53,9 @@ type recorder struct {
 	// after a reconnect cannot be silently joined. The epoch counter is
 	// per-target (not global) because each target has its own WebSocket
 	// connection that can die and reconnect independently.
-	epochs map[string]int
+	epochs         map[string]int
+	urls           map[string]string          // targetID -> latest known URL
+	activeRequests map[string]map[string]bool // targetID -> set of active requestIDs
 }
 
 var rec = newRecorder(defaultActionCapacity, defaultEventCapacity)
@@ -68,11 +70,13 @@ func newRecorder(actionCap, eventCap int) *recorder {
 		eventCap = defaultEventCapacity
 	}
 	return &recorder{
-		actions: make([]ActionRecord, actionCap),
-		events:  make([]EventRecord, eventCap),
-		actCap:  actionCap,
-		evtCap:  eventCap,
-		epochs:  make(map[string]int),
+		actions:        make([]ActionRecord, actionCap),
+		events:         make([]EventRecord, eventCap),
+		actCap:         actionCap,
+		evtCap:         eventCap,
+		epochs:         make(map[string]int),
+		urls:           make(map[string]string),
+		activeRequests: make(map[string]map[string]bool),
 	}
 }
 
@@ -192,6 +196,7 @@ func (r *recorder) QueryEvents(filter EventFilter) []EventRecord {
 		// action_id includes time-attributed events.
 		if e.ActionID == "" {
 			e.ActionID = r.attributeActionLocked(e.Timestamp, e.TargetID)
+			r.events[idx].ActionID = e.ActionID
 		}
 		if !filter.match(e) {
 			continue
@@ -231,6 +236,129 @@ func (r *recorder) attributeActionLocked(t time.Time, targetID string) ActionID 
 		}
 	}
 	return best
+}
+
+func (r *recorder) CurrentURL(targetID string) string {
+	if r == nil || targetID == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.urls[targetID]
+}
+
+func (r *recorder) SetCurrentURL(targetID, url string) {
+	if r == nil || targetID == "" || url == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.urls[targetID] = url
+}
+
+func (r *recorder) ActiveRequestCount(targetID string) int64 {
+	if r == nil || targetID == "" {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if reqs, ok := r.activeRequests[targetID]; ok {
+		return int64(len(reqs))
+	}
+	return 0
+}
+
+func (r *recorder) OnRequestStart(targetID, requestID string) {
+	if r == nil || targetID == "" || requestID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.activeRequests[targetID]; !ok {
+		r.activeRequests[targetID] = make(map[string]bool)
+	}
+	r.activeRequests[targetID][requestID] = true
+}
+
+func (r *recorder) OnRequestEnd(targetID, requestID string) {
+	if r == nil || targetID == "" || requestID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if reqs, ok := r.activeRequests[targetID]; ok {
+		delete(reqs, requestID)
+	}
+}
+
+// NetworkRequestsSince collects all requests initiated on targetID since time t,
+// correlating request and response phases by RequestID into chronological order.
+func (r *recorder) NetworkRequestsSince(targetID string, since time.Time) []map[string]any {
+	if r == nil {
+		return []map[string]any{}
+	}
+	events := r.QueryEvents(EventFilter{targetID: targetID, since: since, limit: 200})
+
+	type reqItem struct {
+		method string
+		url    string
+		status int
+	}
+	reqMap := make(map[string]*reqItem)
+	var orderedIDs []string
+
+	// QueryEvents returns newest first; reverse iterate for chronological order
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Type != "network" {
+			continue
+		}
+		ev, ok := e.Data.(NetworkEvidence)
+		if !ok {
+			if m, isMap := e.Data.(map[string]any); isMap {
+				ev = networkEvidenceFromMap(m)
+			} else {
+				continue
+			}
+		}
+		if ev.RequestID == "" {
+			continue
+		}
+		item, exists := reqMap[ev.RequestID]
+		if !exists {
+			item = &reqItem{
+				method: ev.Method,
+				url:    ev.URL,
+				status: ev.Status,
+			}
+			reqMap[ev.RequestID] = item
+			orderedIDs = append(orderedIDs, ev.RequestID)
+		}
+		if ev.Method != "" {
+			item.method = ev.Method
+		}
+		if ev.URL != "" {
+			item.url = ev.URL
+		}
+		if ev.Status != 0 {
+			item.status = ev.Status
+		}
+	}
+
+	result := make([]map[string]any, 0, len(orderedIDs))
+	for _, id := range orderedIDs {
+		item := reqMap[id]
+		m := map[string]any{
+			"method": item.method,
+			"url":    item.url,
+			"status": item.status,
+		}
+		result = append(result, m)
+		if len(result) >= 20 {
+			break
+		}
+	}
+	return result
 }
 
 const maxEvidencePerKind = 5

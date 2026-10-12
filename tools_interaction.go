@@ -16,6 +16,8 @@ type clickInput struct {
 	Ref            string   `json:"ref,omitempty"`
 	Selector       string   `json:"selector,omitempty"`
 	Text           string   `json:"text,omitempty"`
+	NodeID         string   `json:"node_id,omitempty"`
+	BackendNodeID  int      `json:"backend_node_id,omitempty"`
 	Snapshot       string   `json:"snapshot,omitempty"` // snapshot_id the ref came from — enables stale-ref detection
 	X              *float64 `json:"x,omitempty"`
 	Y              *float64 `json:"y,omitempty"`
@@ -59,28 +61,32 @@ type typeInput struct {
 }
 
 type fillInput struct {
-	Ref      string   `json:"ref,omitempty"`
-	Selector string   `json:"selector,omitempty"`
-	Snapshot string   `json:"snapshot,omitempty"` // snapshot_id the ref came from — enables stale-ref detection
-	Value    string   `json:"value,omitempty"`
-	Text     string   `json:"text,omitempty"`
-	Input    string   `json:"input,omitempty"`
-	Values   []string `json:"values,omitempty"`
-	Fields   []struct {
+	Ref           string   `json:"ref,omitempty"`
+	Selector      string   `json:"selector,omitempty"`
+	Snapshot      string   `json:"snapshot,omitempty"` // snapshot_id the ref came from — enables stale-ref detection
+	NodeID        string   `json:"node_id,omitempty"`
+	BackendNodeID int      `json:"backend_node_id,omitempty"`
+	Value         string   `json:"value,omitempty"`
+	Text          string   `json:"text,omitempty"`
+	Input         string   `json:"input,omitempty"`
+	Values        []string `json:"values,omitempty"`
+	Fields        []struct {
 		Ref      string `json:"ref,omitempty"`
 		Selector string `json:"selector,omitempty"`
 		Value    string `json:"value"`
 	} `json:"fields,omitempty"`
-	Clear     bool   `json:"clear,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
-	Timeout   int    `json:"timeout,omitempty"`
-	Delay     int    `json:"delay,omitempty"`
-	DelayMs   int    `json:"delay_ms,omitempty"`
-	Target    string `json:"target,omitempty"`
-	CSS       string `json:"css,omitempty"`
-	XPath     string `json:"xpath,omitempty"`
-	Query     string `json:"query,omitempty"`
-	NoWait    bool   `json:"no_wait,omitempty"`
+	Clear          bool   `json:"clear,omitempty"`
+	TimeoutMs      int    `json:"timeout_ms,omitempty"`
+	Timeout        int    `json:"timeout,omitempty"`
+	Delay          int    `json:"delay,omitempty"`
+	DelayMs        int    `json:"delay_ms,omitempty"`
+	Target         string `json:"target,omitempty"`
+	CSS            string `json:"css,omitempty"`
+	XPath          string `json:"xpath,omitempty"`
+	Query          string `json:"query,omitempty"`
+	NoWait         bool   `json:"no_wait,omitempty"`
+	SettleMs       int    `json:"settle_ms,omitempty"`
+	WaitTransition bool   `json:"wait_transition,omitempty"`
 }
 
 type scrollInput struct {
@@ -129,31 +135,33 @@ type dragInput struct {
 }
 
 type batchActionStep struct {
-	Action    string   `json:"action"` // click, fill, type, wait_for, hover, scroll, navigate, assert, extract
-	Target    string   `json:"target,omitempty"`
-	Ref       string   `json:"ref,omitempty"`
-	Selector  string   `json:"selector,omitempty"`
-	CSS       string   `json:"css,omitempty"`
-	XPath     string   `json:"xpath,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Value     string   `json:"value,omitempty"`
-	Input     string   `json:"input,omitempty"`
-	Values    []string `json:"values,omitempty"`
-	Key       string   `json:"key,omitempty"`
-	Modifiers string   `json:"modifiers,omitempty"`
-	Clear     bool     `json:"clear,omitempty"`
-	DeltaX    float64  `json:"delta_x,omitempty"`
-	DeltaY    float64  `json:"delta_y,omitempty"`
-	TimeoutMs int      `json:"timeout_ms,omitempty"`
-	Timeout   int      `json:"timeout,omitempty"`
-	Delay     int      `json:"delay,omitempty"`
-	DelayMs   int      `json:"delay_ms,omitempty"`
-	NoWait    bool     `json:"no_wait,omitempty"`
-	URL       string   `json:"url,omitempty"`
-	Href      string   `json:"href,omitempty"`
-	Name      string   `json:"name,omitempty"`     // extract: variable name for {{name}} substitution in later steps
-	Attr      string   `json:"attr,omitempty"`     // extract: text (default) | value | html | attr:<name>
-	Optional  bool     `json:"optional,omitempty"` // on failure: record error but continue the batch
+	Action         string   `json:"action"` // click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract
+	Target         string   `json:"target,omitempty"`
+	Ref            string   `json:"ref,omitempty"`
+	Selector       string   `json:"selector,omitempty"`
+	CSS            string   `json:"css,omitempty"`
+	XPath          string   `json:"xpath,omitempty"`
+	Text           string   `json:"text,omitempty"`
+	Value          string   `json:"value,omitempty"`
+	Input          string   `json:"input,omitempty"`
+	Values         []string `json:"values,omitempty"`
+	Key            string   `json:"key,omitempty"`
+	Modifiers      string   `json:"modifiers,omitempty"`
+	Clear          bool     `json:"clear,omitempty"`
+	DeltaX         float64  `json:"delta_x,omitempty"`
+	DeltaY         float64  `json:"delta_y,omitempty"`
+	TimeoutMs      int      `json:"timeout_ms,omitempty"`
+	Timeout        int      `json:"timeout,omitempty"`
+	Delay          int      `json:"delay,omitempty"`
+	DelayMs        int      `json:"delay_ms,omitempty"`
+	NoWait         bool     `json:"no_wait,omitempty"`
+	SettleMs       int      `json:"settle_ms,omitempty"`
+	WaitTransition bool     `json:"wait_transition,omitempty"`
+	URL            string   `json:"url,omitempty"`
+	Href           string   `json:"href,omitempty"`
+	Name           string   `json:"name,omitempty"`     // extract: variable name for {{name}} substitution in later steps
+	Attr           string   `json:"attr,omitempty"`     // extract: text (default) | value | html | attr:<name>
+	Optional       bool     `json:"optional,omitempty"` // on failure: record error but continue the batch
 }
 
 type batchActionsInput struct {
@@ -201,11 +209,7 @@ func registerInteractionTools(server *mcp.Server) {
 			"action_id": string(rec.ID),
 			"clicked":   map[string]any{"x": x, "y": y, "button": button, "click_count": clickCount},
 		}
-		if page := miniSnapshot(ws); page != nil {
-			result["page"] = page
-		}
-		attachEvidence(rec, ws, result)
-		rec.SetResult(result)
+		settleAndCaptureVerification(rec, ws, result)
 		return nil, result, nil
 	})
 
@@ -234,8 +238,9 @@ func registerInteractionTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			rec.SetResult(map[string]any{"action_id": string(rec.ID), "key": key})
-			return nil, map[string]any{"action_id": string(rec.ID), "key": key}, nil
+			result := map[string]any{"action_id": string(rec.ID), "key": key}
+			settleAndCaptureVerification(rec, ws, result)
+			return nil, result, nil
 		}
 		text := resolveValue(input.Text, input.Value, input.Input)
 		if text == "" && !input.Clear {
@@ -245,15 +250,31 @@ func registerInteractionTools(server *mcp.Server) {
 		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
 		if selector != "" {
 			opts := autoWaitOptions{TimeoutMs: timeoutMs, NoWait: input.NoWait}
-			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
-				rec.SetErrorFromError(err)
-				return nil, nil, err
+			if a11yNode, isA11y, err := resolveA11yNode(ws, selector); err == nil && isA11y {
+				if _, _, _, waitErr := autoWaitForElement(ctx, ws, selector, "", opts); waitErr != nil {
+					rec.SetErrorFromError(waitErr)
+					return nil, nil, waitErr
+				}
+				objectID, rErr := cdpResolveNode(ws, a11yNode.BackendDOMNodeID)
+				if rErr != nil {
+					rec.SetErrorFromError(rErr)
+					return nil, nil, rErr
+				}
+				defer cdpRequest(ws, "Runtime.releaseObject", map[string]any{"objectId": objectID}, nil)
+				_, _ = cdpCallFunctionOn(ws, objectID, a11yFocusFunction, []any{input.Clear}, true)
+			} else {
+				if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
+					rec.SetErrorFromError(err)
+					return nil, nil, err
+				}
 			}
 		}
 		if selector != "" || input.Clear {
-			if _, err := cdpEvaluate(ws, focusExpression(selector, input.Clear), true); err != nil {
-				rec.SetErrorFromError(err)
-				return nil, nil, err
+			if !isLikelyA11yRef(selector) {
+				if _, err := cdpEvaluate(ws, focusExpression(selector, input.Clear), true); err != nil {
+					rec.SetErrorFromError(err)
+					return nil, nil, err
+				}
 			}
 		}
 		if text != "" {
@@ -263,14 +284,13 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 		}
 		result := map[string]any{"action_id": string(rec.ID), "typed": len([]rune(text)), "selector": selector, "cleared": input.Clear}
-		attachEvidence(rec, ws, result)
-		rec.SetResult(result)
+		settleAndCaptureVerification(rec, ws, result)
 		return nil, result, nil
 	})
 
 	addTool(server, &mcp.Tool{
 		Name:        "fill",
-		Description: "Fill a single input/textarea/select with a value, fill multiple form fields at once, or select dropdown options. Auto-waits for element. More reliable than type for form fields. Use value for a single field, fields to fill multiple fields at once, or values (with ref/selector) to select dropdown options.",
+		Description: "Fill a single input/textarea/select with a value, fill multiple form fields at once, or select dropdown options. Auto-waits for element and settles reactive transitions before taking page snapshot. More reliable than type for form fields. Use value for a single field, fields to fill multiple fields at once, or values (with ref/selector) to select dropdown options.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input fillInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("fill")
 		defer rec.End()
@@ -306,15 +326,25 @@ func registerInteractionTools(server *mcp.Server) {
 				}
 				results = append(results, map[string]any{"selector": selector, "filled": true})
 			}
-			result := map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}
-			if page := miniSnapshot(ws); page != nil {
-				result["page"] = page
+			if !input.NoWait {
+				settleMs := input.SettleMs
+				if settleMs <= 0 {
+					settleMs = 50
+				}
+				waitTransitionSettle(ws, settleMs)
 			}
-			attachEvidence(rec, ws, result)
-			rec.SetResult(result)
+			result := map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}
+			settleAndCaptureVerification(rec, ws, result)
 			return nil, result, nil
 		}
 		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
+		if selector == "" {
+			if input.NodeID != "" {
+				selector = "ax:" + input.NodeID
+			} else if input.BackendNodeID > 0 {
+				selector = fmt.Sprintf("backend:%d", input.BackendNodeID)
+			}
+		}
 		val := resolveValue(input.Value, input.Text, input.Input)
 		if selector == "" {
 			rec.SetErrorFromError(fmt.Errorf("fill requires ref or selector"))
@@ -328,6 +358,56 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 			opts.ExpectMark = mark
 		}
+
+		a11yNode, isA11y, a11yErr := resolveA11yNode(ws, selector)
+		if a11yErr != nil {
+			rec.SetErrorFromError(a11yErr)
+			return nil, nil, a11yErr
+		}
+		if isA11y {
+			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			objectID, err := cdpResolveNode(ws, a11yNode.BackendDOMNodeID)
+			if err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			defer cdpRequest(ws, "Runtime.releaseObject", map[string]any{"objectId": objectID}, nil)
+			if len(input.Values) > 0 {
+				value, err := cdpCallFunctionOn(ws, objectID, a11ySelectOptionsFunction, []any{input.Values}, true)
+				if err != nil {
+					rec.SetErrorFromError(err)
+					return nil, nil, err
+				}
+				if !input.NoWait {
+					settleMs := input.SettleMs
+					if settleMs <= 0 {
+						settleMs = 50
+					}
+					waitTransitionSettle(ws, settleMs)
+				}
+				result := map[string]any{"action_id": string(rec.ID), "selected": value}
+				settleAndCaptureVerification(rec, ws, result)
+				return nil, result, nil
+			}
+			if _, err := cdpCallFunctionOn(ws, objectID, a11yFillFunction, []any{val}, true); err != nil {
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			if !input.NoWait {
+				settleMs := input.SettleMs
+				if settleMs <= 0 {
+					settleMs = 50
+				}
+				waitTransitionSettle(ws, settleMs)
+			}
+			result := map[string]any{"action_id": string(rec.ID), "filled": selector, "backend_dom_node_id": a11yNode.BackendDOMNodeID, "value_length": len([]rune(val))}
+			settleAndCaptureVerification(rec, ws, result)
+			return nil, result, nil
+		}
+
 		if len(input.Values) > 0 {
 			if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
 				rec.SetErrorFromError(err)
@@ -338,12 +418,15 @@ func registerInteractionTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			result := map[string]any{"action_id": string(rec.ID), "selected": value}
-			if page := miniSnapshot(ws); page != nil {
-				result["page"] = page
+			if !input.NoWait {
+				settleMs := input.SettleMs
+				if settleMs <= 0 {
+					settleMs = 50
+				}
+				waitTransitionSettle(ws, settleMs)
 			}
-			attachEvidence(rec, ws, result)
-			rec.SetResult(result)
+			result := map[string]any{"action_id": string(rec.ID), "selected": value}
+			settleAndCaptureVerification(rec, ws, result)
 			return nil, result, nil
 		}
 		if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
@@ -354,12 +437,15 @@ func registerInteractionTools(server *mcp.Server) {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(val))}
-		if page := miniSnapshot(ws); page != nil {
-			result["page"] = page
+		if !input.NoWait {
+			settleMs := input.SettleMs
+			if settleMs <= 0 {
+				settleMs = 50
+			}
+			waitTransitionSettle(ws, settleMs)
 		}
-		attachEvidence(rec, ws, result)
-		rec.SetResult(result)
+		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(val))}
+		settleAndCaptureVerification(rec, ws, result)
 		return nil, result, nil
 	})
 
@@ -409,8 +495,7 @@ func registerInteractionTools(server *mcp.Server) {
 			return nil, nil, err
 		}
 		out := map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result}
-		attachEvidence(rec, ws, out)
-		rec.SetResult(out)
+		settleAndCaptureVerification(rec, ws, out)
 		return nil, out, nil
 	})
 
@@ -504,7 +589,7 @@ func registerInteractionTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "batch_actions",
-		Description: "Execute a sequence of UI interactions (click, fill, type, wait_for, hover, scroll, navigate) in a single turn. Returns execution status and post-action page snapshot.",
+		Description: "Execute a sequence of UI interactions (click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract) in a single turn. Replays until the first error (unless optional: true). Reduces multi-turn latency.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input batchActionsInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("batch_actions")
 		defer rec.End()
@@ -539,11 +624,7 @@ func registerInteractionTools(server *mcp.Server) {
 				"failed_step": i + 1,
 				"results":     stepResults,
 			}
-			if page := miniSnapshot(ws); page != nil {
-				res["page"] = page
-			}
-			attachEvidence(rec, ws, res)
-			rec.SetResult(res)
+			settleAndCaptureVerification(rec, ws, res)
 			return nil, res, fmt.Errorf("step %d (%s) failed: %w", i+1, actionType, err)
 		}
 
@@ -601,13 +682,37 @@ func registerInteractionTools(server *mcp.Server) {
 					if _, err := cdpEvaluate(ws, fillExpression(target, val), true); err != nil {
 						return err
 					}
+					if !step.NoWait && (step.WaitTransition || step.SettleMs > 0) {
+						settleMs := step.SettleMs
+						if settleMs <= 0 {
+							settleMs = 50
+						}
+						waitTransitionSettle(ws, settleMs)
+					}
 					stepRes["filled"] = target
 				}
 
-			case "type":
-				key := strings.TrimSpace(step.Key)
+			case "type", "key", "press":
+				var key string
+				if actionType == "key" || actionType == "press" {
+					key = expandVars(resolveFirstNonEmpty(step.Key, step.Value, step.Text, step.Input))
+					if key == "" {
+						return fmt.Errorf("%s action requires key, value, text, or input", actionType)
+					}
+				} else {
+					key = expandVars(strings.TrimSpace(step.Key))
+				}
+
 				if key != "" {
-					if err := cdpDispatchKey(ws, expandVars(key), modifierMask(step.Modifiers)); err != nil {
+					if target != "" {
+						if _, _, _, err := autoWaitForElement(ctx, ws, target, "", opts); err != nil {
+							return err
+						}
+						if _, err := cdpEvaluate(ws, focusExpression(target, step.Clear), true); err != nil {
+							return err
+						}
+					}
+					if err := cdpDispatchKey(ws, key, modifierMask(step.Modifiers)); err != nil {
 						return err
 					}
 					stepRes["key"] = key
@@ -749,11 +854,7 @@ func registerInteractionTools(server *mcp.Server) {
 		if len(vars) > 0 {
 			result["vars"] = vars
 		}
-		if page := miniSnapshot(ws); page != nil {
-			result["page"] = page
-		}
-		attachEvidence(rec, ws, result)
-		rec.SetResult(result)
+		settleAndCaptureVerification(rec, ws, result)
 		return nil, result, nil
 	})
 }
@@ -768,6 +869,13 @@ func resolveClickPoint(ctx context.Context, ws string, input clickInput) (float6
 		return *input.X, *input.Y, nil
 	}
 	selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
+	if selector == "" {
+		if input.NodeID != "" {
+			selector = "ax:" + input.NodeID
+		} else if input.BackendNodeID > 0 {
+			selector = fmt.Sprintf("backend:%d", input.BackendNodeID)
+		}
+	}
 	text := resolveFirstNonEmpty(input.Text, input.Query)
 	if selector == "" && text == "" {
 		return 0, 0, fmt.Errorf("click requires ref, selector, text, x/y, or image_x/image_y")
@@ -851,6 +959,19 @@ if (selector) {
   el = document.activeElement;
 }
 if (!el) throw new Error(selector ? 'element not found' : 'no active element');
+
+// Smart container / label sniffing (Issue #5)
+if (!('value' in el) && !el.isContentEditable && el.tagName !== 'SELECT') {
+  let target = null;
+  if (el.tagName === 'LABEL') {
+    target = el.control || (el.htmlFor ? document.getElementById(el.htmlFor) : null) ||
+             el.querySelector('input:not([type="hidden"]), textarea, select, [contenteditable="true"]');
+  } else {
+    target = el.querySelector('input:not([type="hidden"]), textarea, select, [contenteditable="true"]');
+  }
+  if (target) el = target;
+}
+
 if (el.scrollIntoView) el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
 if (el.focus) el.focus();
 if (clear) {
@@ -895,6 +1016,19 @@ if (selector) {
   el = document.activeElement;
 }
 if (!el) throw new Error(selector ? 'element not found' : 'no active element');
+
+// Smart container / label sniffing (Issue #5)
+if (!('value' in el) && !el.isContentEditable && el.tagName !== 'SELECT') {
+  let target = null;
+  if (el.tagName === 'LABEL') {
+    target = el.control || (el.htmlFor ? document.getElementById(el.htmlFor) : null) ||
+             el.querySelector('input:not([type="hidden"]), textarea, select, [contenteditable="true"]');
+  } else {
+    target = el.querySelector('input:not([type="hidden"]), textarea, select, [contenteditable="true"]');
+  }
+  if (target) el = target;
+}
+
 if (typeof el.scrollIntoView === 'function') {
   el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
 }
@@ -911,6 +1045,21 @@ if (el.tagName === 'SELECT') {
 }
 
 if ('value' in el) {
+  const previousValue = el.value !== undefined ? el.value : '';
+  if (el._valueTracker) {
+    el._valueTracker.setValue(previousValue === text ? (text === '' ? '__argus_cleared__' : '') : previousValue);
+  }
+
+  if (typeof InputEvent === 'function') {
+    el.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText'
+    }));
+  }
+
   const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
   const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
   if (desc && desc.set) {
@@ -918,14 +1067,39 @@ if ('value' in el) {
   } else {
     el.value = text;
   }
-  if (el._valueTracker) {
-    el._valueTracker.setValue(text === '' ? '__argus_cleared__' : '');
+
+  if (typeof InputEvent === 'function') {
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText'
+    }));
+  } else {
+    el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
   }
-  el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
   el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
 } else if (el.isContentEditable) {
+  if (typeof InputEvent === 'function') {
+    el.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText'
+    }));
+  }
   el.textContent = text;
-  el.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: text}));
+  if (typeof InputEvent === 'function') {
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText'
+    }));
+  } else {
+    el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+  }
   el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
 }
 return {filled: true, value: text};

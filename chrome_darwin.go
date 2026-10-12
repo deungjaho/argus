@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"testing"
 )
 
 // Note: findChromeBinary is also defined here for darwin.
@@ -32,7 +33,8 @@ func findChromeDarwin() (string, error) {
 			continue
 		}
 		// Verify the actual binary exists inside the .app bundle
-		for _, name := range []string{"chrome-argus", "chrome-argus.bin", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
+		// Prioritize raw binary "chrome-argus.bin" before "chrome-argus" wrapper script (which hardcodes 9224)
+		for _, name := range []string{"chrome-argus.bin", "chrome-argus", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
 			if fileExists(filepath.Join(c, "Contents", "MacOS", name)) {
 				return c, nil
 			}
@@ -67,8 +69,9 @@ func launchChrome() error {
 		return err
 	}
 	// Resolve to the actual binary inside the .app bundle
+	// Prioritize raw binary "chrome-argus.bin" before "chrome-argus" wrapper script (which hardcodes 9224)
 	var binaryPath string
-	for _, name := range []string{"chrome-argus", "chrome-argus.bin", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
+	for _, name := range []string{"chrome-argus.bin", "chrome-argus", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
 		p := filepath.Join(appPath, "Contents", "MacOS", name)
 		if fileExists(p) {
 			binaryPath = p
@@ -103,11 +106,22 @@ func launchChrome() error {
 	}
 	args = append(args, chromeHeadlessArgs()...)
 
-	// On macOS, launch via LaunchServices. -n creates an isolated instance.
-	// Default (no --focus): -g keeps it in the background and -j launches
-	// it hidden, so the window never covers the user's screen. With
-	// --focus, Chrome activates normally and may come to the front.
-	if strings.HasSuffix(appPath, ".app") {
+	// When headless mode is requested or when running tests, NEVER use LaunchServices / open -a.
+	// Launching via open delegates to LaunchServices which pops GUI windows on the user's active screen.
+	// Instead, directly execute binaryPath via exec.Command.
+	isHeadless := len(chromeHeadlessArgs()) > 0 ||
+		strings.TrimSpace(os.Getenv("ARGUS_CHROME_HEADLESS")) == "1" ||
+		strings.TrimSpace(os.Getenv("ARGUS_CHROME_HEADLESS")) == "true" ||
+		testing.Testing() ||
+		os.Getenv("ARGUS_NO_OPEN") == "1"
+	for _, a := range args {
+		if strings.HasPrefix(a, "--headless") {
+			isHeadless = true
+			break
+		}
+	}
+
+	if !isHeadless && strings.HasSuffix(appPath, ".app") {
 		openArgs := []string{"-n", "-a", appPath}
 		if !wantFocus() {
 			openArgs = []string{"-n", "-g", "-j", "-a", appPath}

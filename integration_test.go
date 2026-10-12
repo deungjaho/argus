@@ -1283,9 +1283,8 @@ func TestIntegrationExportTrace(t *testing.T) {
 		return len(events) >= 1
 	})
 
-	// Export trace (simulating export_trace tool behavior with controlled dir)
-	traceDir := getTraceDir()
-	os.MkdirAll(traceDir, 0700)
+	// Export trace (simulating trace save with temp dir)
+	traceDir := t.TempDir()
 	traceFile := filepath.Join(traceDir, fmt.Sprintf("argus-test-trace-%d.json", time.Now().UnixNano()))
 	defer os.Remove(traceFile)
 
@@ -1352,55 +1351,7 @@ func containsStr(s, substr string) bool {
 // These tests call trace tools through the real MCP handler pipeline,
 // validating schema, filter, target scope, path/permission, and redaction contracts.
 
-// setupMCPServer creates a real MCP server with all tools registered,
-// connects an in-memory client, and returns the client session.
-func setupMCPServer(t *testing.T) *mcp.ClientSession {
-	t.Helper()
-	ctx := context.Background()
-	server := mcp.NewServer(&mcp.Implementation{Name: "argus-test", Version: "test"}, nil)
-	registerAllTools(server)
-
-	ct, st := mcp.NewInMemoryTransports()
-	if _, err := server.Connect(ctx, st, nil); err != nil {
-		t.Fatalf("server connect failed: %v", err)
-	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
-	cs, err := client.Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatalf("client connect failed: %v", err)
-	}
-	return cs
-}
-
-// callMCPTool invokes a tool via the MCP client session and returns the result.
-func callMCPTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
-	t.Helper()
-	ctx := context.Background()
-	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
-	if err != nil {
-		t.Fatalf("CallTool %s failed: %v", name, err)
-	}
-	return res
-}
-
-// extractToolResultJSON extracts the JSON content from a CallToolResult.
-func extractToolResultJSON(t *testing.T, res *mcp.CallToolResult) map[string]any {
-	t.Helper()
-	if res == nil || len(res.Content) == 0 {
-		t.Fatal("empty result content")
-	}
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			var parsed map[string]any
-			if err := json.Unmarshal([]byte(tc.Text), &parsed); err != nil {
-				t.Fatalf("failed to parse result JSON: %v\nraw: %s", err, tc.Text)
-			}
-			return parsed
-		}
-	}
-	t.Fatal("no text content in result")
-	return nil
-}
+// setupMCPServer, callMCPTool, and extractToolResultJSON are provided in e2e_runner_test.go
 
 // --- Test 22: Timeline via real MCP handler ---
 
@@ -1567,107 +1518,6 @@ func TestIntegrationMCPDiagnoseHandler(t *testing.T) {
 				t.Errorf("console_issue %d timestamp %q should be RFC3339Nano", i, ts)
 			}
 		}
-	}
-}
-
-// --- Test 24: Export trace via real MCP handler — path/permission/redaction ---
-
-func TestIntegrationMCPExportTraceHandler(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	_, cleanup := setupTestChrome(t)
-	defer cleanup()
-
-	rec.Clear()
-
-	server, serverURL := setupTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, simpleTestPage())
-	})
-	defer server.Close()
-
-	setConfig(serverURL, 0, nil)
-	ws, err := requireTargetWS()
-	if err != nil {
-		t.Fatalf("requireTargetWS failed: %v", err)
-	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		_, err := cdpEvaluate(ws, `document.body`, true)
-		return err == nil
-	})
-
-	// Set ARGUS_TRACE_DIR to temp dir
-	traceDir := t.TempDir()
-	os.Setenv("ARGUS_TRACE_DIR", traceDir)
-	defer os.Unsetenv("ARGUS_TRACE_DIR")
-
-	// Call export_trace through real MCP handler
-	cs := setupMCPServer(t)
-	defer cs.Close()
-
-	filename := fmt.Sprintf("mcp-test-trace-%d.json", time.Now().UnixNano())
-	res := callMCPTool(t, cs, "export_trace", map[string]any{
-		"path": filename,
-	})
-	parsed := extractToolResultJSON(t, res)
-
-	// Verify path is inside traceDir
-	exportPath, _ := parsed["path"].(string)
-	if exportPath == "" {
-		t.Fatal("export_trace result missing 'path'")
-	}
-	if !containsStr(exportPath, traceDir) {
-		t.Errorf("export path %q should be inside traceDir %q", exportPath, traceDir)
-	}
-	if !containsStr(exportPath, filename) {
-		t.Errorf("export path %q should contain filename %q", exportPath, filename)
-	}
-
-	// Verify file exists with 0600 permissions
-	info, err := os.Stat(exportPath)
-	if err != nil {
-		t.Fatalf("trace file not found: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("trace file mode = %o, want 0600", info.Mode().Perm())
-	}
-
-	// Verify file content is valid JSON with expected keys
-	data, err := os.ReadFile(exportPath)
-	if err != nil {
-		t.Fatalf("failed to read trace file: %v", err)
-	}
-	var trace map[string]any
-	if err := json.Unmarshal(data, &trace); err != nil {
-		t.Fatalf("trace file is not valid JSON: %v", err)
-	}
-	for _, key := range []string{"exported_at", "version", "actions", "events", "recorder"} {
-		if _, ok := trace[key]; !ok {
-			t.Errorf("trace file missing '%s'", key)
-		}
-	}
-
-	// Verify recorder stats include new fields
-	recorder, ok := trace["recorder"].(map[string]any)
-	if !ok {
-		t.Fatal("trace 'recorder' is not a map")
-	}
-	for _, field := range []string{"events_dropped", "data_truncated", "domain_enable_error", "reconnect_gaps"} {
-		if _, ok := recorder[field]; !ok {
-			t.Errorf("trace recorder missing '%s'", field)
-		}
-	}
-
-	// Test: refuse to overwrite existing file
-	res2 := callMCPTool(t, cs, "export_trace", map[string]any{
-		"path": filename,
-	})
-	if res2 != nil && res2.IsError {
-		// Expected: error because file already exists
-		t.Log("correctly refused to overwrite existing trace file")
-	} else {
-		t.Error("export_trace should refuse to overwrite existing file")
 	}
 }
 
@@ -2838,9 +2688,9 @@ func TestIntegrationFindPrioritizationAndCaps(t *testing.T) {
 	cs := setupMCPServer(t)
 	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
 
-	res := callMCPTool(t, cs, "find", map[string]any{"text": "MatchTarget"})
+	res := callMCPTool(t, cs, "get_element", map[string]any{"text": "MatchTarget"})
 	if res.IsError {
-		t.Fatalf("find failed: %v", res)
+		t.Fatalf("get_element failed: %v", res)
 	}
 
 	data := extractToolResultJSON(t, res)
@@ -2902,9 +2752,9 @@ func TestIntegrationFindAriaLabelAndStarvation(t *testing.T) {
 	_ = callMCPTool(t, cs, "navigate", map[string]any{"url": serverURL})
 
 	// 1. Search by aria-label when innerText is "×"
-	resAria := callMCPTool(t, cs, "find", map[string]any{"text": "Dismiss Notification"})
+	resAria := callMCPTool(t, cs, "get_element", map[string]any{"text": "Dismiss Notification"})
 	if resAria.IsError {
-		t.Fatalf("find aria-label failed: %v", resAria)
+		t.Fatalf("get_element aria-label failed: %v", resAria)
 	}
 	dataAria := extractToolResultJSON(t, resAria)
 	matchesAria, _ := dataAria["matches"].([]any)
@@ -2917,9 +2767,9 @@ func TestIntegrationFindAriaLabelAndStarvation(t *testing.T) {
 	}
 
 	// 2. Search by placeholder when value is "alice"
-	resPlace := callMCPTool(t, cs, "find", map[string]any{"text": "Search User"})
+	resPlace := callMCPTool(t, cs, "get_element", map[string]any{"text": "Search User"})
 	if resPlace.IsError {
-		t.Fatalf("find placeholder failed: %v", resPlace)
+		t.Fatalf("get_element placeholder failed: %v", resPlace)
 	}
 	dataPlace := extractToolResultJSON(t, resPlace)
 	matchesPlace, _ := dataPlace["matches"].([]any)
@@ -2932,9 +2782,9 @@ func TestIntegrationFindAriaLabelAndStarvation(t *testing.T) {
 	}
 
 	// 3. Priority 1 paragraph (<p>) is not starved by 60 container divs
-	resStarv := callMCPTool(t, cs, "find", map[string]any{"text": "SpecialKey"})
+	resStarv := callMCPTool(t, cs, "get_element", map[string]any{"text": "SpecialKey"})
 	if resStarv.IsError {
-		t.Fatalf("find SpecialKey failed: %v", resStarv)
+		t.Fatalf("get_element SpecialKey failed: %v", resStarv)
 	}
 	dataStarv := extractToolResultJSON(t, resStarv)
 	matchesStarv, _ := dataStarv["matches"].([]any)

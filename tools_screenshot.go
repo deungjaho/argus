@@ -10,6 +10,10 @@ import (
 )
 
 type screenshotInput struct {
+	Selector      string `json:"selector,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	SaveToDisk    bool   `json:"save_to_disk,omitempty"`
+	Disk          bool   `json:"disk,omitempty"`
 	Path          string `json:"path,omitempty"`
 	FilePath      string `json:"file_path,omitempty"`
 	File          string `json:"file,omitempty"`
@@ -30,26 +34,7 @@ type screenshotInput struct {
 	TabID         string `json:"tab_id,omitempty"`
 }
 
-type screenshotFullPageInput struct {
-	Path          string `json:"path,omitempty"`
-	FilePath      string `json:"file_path,omitempty"`
-	File          string `json:"file,omitempty"`
-	Filename      string `json:"filename,omitempty"`
-	Output        string `json:"output,omitempty"`
-	Format        string `json:"format,omitempty"`
-	Type          string `json:"type,omitempty"`
-	Quality       int    `json:"quality,omitempty"`
-	FullPage      bool   `json:"full_page,omitempty"`
-	FullPageCamel bool   `json:"fullPage,omitempty"`
-	MaxWidth      int    `json:"max_width,omitempty"`
-	Grid          bool   `json:"grid,omitempty"`
-	MajorStep     int    `json:"major_step,omitempty"`
-	MinorStep     int    `json:"minor_step,omitempty"`
-	MaxSizeKB     int    `json:"max_size_kb,omitempty"`
-	Target        string `json:"target,omitempty"`
-	TargetID      string `json:"target_id,omitempty"`
-	TabID         string `json:"tab_id,omitempty"`
-}
+type screenshotFullPageInput = screenshotInput
 
 func resolveInputPath(paths ...string) string {
 	for _, p := range paths {
@@ -70,81 +55,19 @@ func resolveInputFormat(format, typ string) string {
 func registerScreenshotTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "screenshot",
-		Description: "Capture a compressed JPEG screenshot of the current viewport. Returns image + metadata (viewport dimensions, image dimensions, coordinate system). Use viewport x/y with click. Set grid=true to overlay a coordinate grid (use those x/y values with click or inspect_point). max_size_kb bounds the screenshot file (default 500, max 2000); if exceeded, truncation metadata is returned instead of the image. Optional path saves the screenshot to a file.",
+		Description: "Capture a compressed JPEG screenshot of the current viewport or a specific element (via selector/ref). Supports save_to_disk=true to write directly to disk without returning large base64 image data. Set grid=true to overlay a coordinate grid. max_size_kb bounds screenshot file size (default 500, max 2000).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, any, error) {
 		return screenshotResult(input)
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "screenshot_full_page",
-		Description: "Capture a full-page screenshot (including content below the fold). Returns image + metadata. Optional path saves the screenshot to a file.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input screenshotFullPageInput) (*mcp.CallToolResult, any, error) {
-		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
-			setCurrentTargetID(targetID)
-		}
-		target, err := requireTarget()
-		if err != nil {
-			return nil, nil, err
-		}
-		ws := target.WebSocketDebuggerURL
-		pngData, err := cdpCaptureScreenshot(ws, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		reqPath := resolveInputPath(input.Path, input.FilePath, input.File, input.Filename, input.Output)
-		reqFormat := resolveInputFormat(input.Format, input.Type)
-		path, err := resolveScreenshotPath(reqPath, reqFormat)
-		if err != nil {
-			return nil, nil, err
-		}
-		imgData, mimeType, err := writeScreenshot(pngData, path, reqFormat, input.Quality, input.MaxWidth, true)
-		if err != nil {
-			return nil, nil, err
-		}
-		imageWidth, imageHeight, _ := imageDimensions(imgData)
-		meta := map[string]any{
-			"url":       target.URL,
-			"title":     target.Title,
-			"path":      path,
-			"bytes":     len(imgData),
-			"mime_type": mimeType,
-			"full_page": true,
-			"image": map[string]any{
-				"width":  imageWidth,
-				"height": imageHeight,
-			},
-		}
-		if input.MaxSizeKB > 0 {
-			maxSizeKB := input.MaxSizeKB
-			if maxSizeKB > 2000 {
-				maxSizeKB = 2000
-			}
-			maxBytes := maxSizeKB * 1024
-			if len(imgData) > maxBytes {
-				attachTruncation(meta, TruncationMeta{
-					Truncated:  true,
-					TotalCount: len(imgData),
-					ShownCount: 0,
-					Reason:     fmt.Sprintf("screenshot %d bytes exceeds max_size_kb=%d (%d bytes); image omitted from response", len(imgData), maxSizeKB, maxBytes),
-				})
-				meta["max_size_kb"] = maxSizeKB
-				metaText, _ := json.MarshalIndent(meta, "", "  ")
-				return &mcp.CallToolResult{Content: []mcp.Content{
-					&mcp.TextContent{Text: string(metaText)},
-				}}, nil, nil
-			}
-		}
-		metaText, _ := json.MarshalIndent(meta, "", "  ")
-		return &mcp.CallToolResult{Content: []mcp.Content{
-			&mcp.TextContent{Text: string(metaText)},
-			&mcp.ImageContent{Data: imgData, MIMEType: mimeType},
-		}}, nil, nil
 	})
 }
 
 func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
-	if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+	targetUsedAsTabID := false
+	if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID); targetID != "" {
 		setCurrentTargetID(targetID)
+	} else if input.Target != "" {
+		setCurrentTargetID(input.Target)
+		targetUsedAsTabID = true
 	}
 	target, err := requireTarget()
 	if err != nil {
@@ -169,7 +92,21 @@ func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
 	}
 	fullPage := input.FullPage || input.FullPageCamel
 	viewport, _ := viewportMetrics(ws)
-	pngData, err := cdpCaptureScreenshot(ws, fullPage)
+	var elemTarget string
+	if !targetUsedAsTabID {
+		elemTarget = input.Target
+	}
+	targetSelector := resolveSelector(input.Ref, input.Selector, "", elemTarget, "", "")
+	var clip *ScreenshotClip
+	var elemBounds map[string]any
+	if targetSelector != "" {
+		var cErr error
+		clip, elemBounds, cErr = resolveElementClip(ws, targetSelector)
+		if cErr != nil {
+			return nil, nil, cErr
+		}
+	}
+	pngData, err := cdpCaptureScreenshotWithClip(ws, fullPage, clip)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -197,12 +134,15 @@ func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
 	}
 	imageWidth, imageHeight, _ := imageDimensions(imgData)
 	meta := map[string]any{
-		"url":       target.URL,
-		"title":     target.Title,
-		"path":      path,
-		"bytes":     len(imgData),
-		"mime_type": mimeType,
-		"grid":      input.Grid,
+		"url":        target.URL,
+		"title":      target.Title,
+		"path":       path,
+		"file_path":  path,
+		"saved_to":   path,
+		"bytes":      len(imgData),
+		"size_bytes": len(imgData),
+		"mime_type":  mimeType,
+		"grid":       input.Grid,
 		"image": map[string]any{
 			"width":  imageWidth,
 			"height": imageHeight,
@@ -215,8 +155,21 @@ func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
 			"click":  "Pass x/y directly to click. If using image pixels from a resized screenshot, pass image_x/image_y with screenshot_path.",
 		},
 	}
-	if input.FullPage {
+	if fullPage {
 		meta["full_page"] = true
+	}
+	if clip != nil {
+		meta["clipped"] = true
+		meta["selector"] = targetSelector
+		meta["element_bounds"] = elemBounds
+	}
+	saveToDisk := input.SaveToDisk || input.Disk
+	if saveToDisk {
+		meta["saved_to_disk"] = true
+		metaText, _ := json.MarshalIndent(meta, "", "  ")
+		return &mcp.CallToolResult{Content: []mcp.Content{
+			&mcp.TextContent{Text: string(metaText)},
+		}}, nil, nil
 	}
 	if scale := imageToViewportScale(viewport, imageWidth, imageHeight); scale != nil {
 		meta["image_to_viewport"] = scale

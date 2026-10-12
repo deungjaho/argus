@@ -34,6 +34,7 @@ func init() {
 	} else {
 		configuredProfile = "isolated"
 	}
+	configuredAttach = envBoolDefault(false, "ARGUS_ATTACH")
 }
 
 func cdpBaseURL() string {
@@ -43,10 +44,17 @@ func cdpBaseURL() string {
 		port = configuredPort
 	}
 	configMu.RUnlock()
+	assertNotPort9224("cdpBaseURL", port)
 	return fmt.Sprintf("http://127.0.0.1:%d", port)
 }
 
 func setConfig(url string, port int, attach *bool) {
+	if url != "" {
+		assertNotPort9224(url)
+	}
+	if port != 0 {
+		assertNotPort9224("setConfig", port)
+	}
 	configMu.Lock()
 	defer configMu.Unlock()
 	if url != "" {

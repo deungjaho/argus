@@ -280,3 +280,102 @@ func downscaleImage(img image.Image, maxWidth, maxHeight int) image.Image {
 	}
 	return dst
 }
+
+// resolveElementClip locates an element via CSS selector or a11y ref and returns its clip box.
+func resolveElementClip(ws, selector string) (*ScreenshotClip, map[string]any, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return nil, nil, fmt.Errorf("selector is empty")
+	}
+
+	// 1. If it's an a11y node reference
+	if a11yNode, isA11y, err := resolveA11yNode(ws, selector); err == nil && isA11y {
+		if a11yNode.BackendDOMNodeID <= 0 {
+			return nil, nil, fmt.Errorf("a11y node %q has invalid backendDOMNodeId: %d", a11yNode.NodeID, a11yNode.BackendDOMNodeID)
+		}
+		_ = cdpScrollIntoViewIfNeeded(ws, a11yNode.BackendDOMNodeID)
+		model, bErr := cdpGetBoxModel(ws, a11yNode.BackendDOMNodeID)
+		if bErr != nil {
+			return nil, nil, fmt.Errorf("failed to get box model for a11y node %q: %w", a11yNode.NodeID, bErr)
+		}
+		box := model.BoundingBox()
+		if box == nil {
+			return nil, nil, fmt.Errorf("invalid box model for a11y node %q", a11yNode.NodeID)
+		}
+		w, _ := numberValue(box["width"])
+		h, _ := numberValue(box["height"])
+		x, _ := numberValue(box["x"])
+		y, _ := numberValue(box["y"])
+		if w <= 0 || h <= 0 {
+			return nil, nil, fmt.Errorf("element %q has zero dimensions (width: %.1f, height: %.1f); cannot capture screenshot", selector, w, h)
+		}
+		// Query page scroll offsets to convert to page coordinates for captureBeyondViewport
+		scrollVal, _ := cdpEvaluate(ws, `(() => ({scrollX: window.scrollX, scrollY: window.scrollY}))()`, true)
+		scrollX, scrollY := 0.0, 0.0
+		if sm, ok := scrollVal.(map[string]any); ok {
+			scrollX, _ = numberValue(sm["scrollX"])
+			scrollY, _ = numberValue(sm["scrollY"])
+		}
+		clip := &ScreenshotClip{
+			X:      x + scrollX,
+			Y:      y + scrollY,
+			Width:  w,
+			Height: h,
+			Scale:  1.0,
+		}
+		return clip, box, nil
+	}
+
+	// 2. CSS selector resolution via page evaluation
+	queryJS := fmt.Sprintf(`(() => {
+const sel = %s;
+let el = null;
+try {
+  el = document.querySelector(sel);
+} catch (e) {
+  el = document.getElementById(sel) ||
+       document.querySelector('[data-testid=' + JSON.stringify(sel) + ']') ||
+       document.querySelector('[data-test-id=' + JSON.stringify(sel) + ']');
+}
+if (!el) return {found: false};
+el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+const rect = el.getBoundingClientRect();
+return {
+  found: true,
+  x: rect.x + window.scrollX,
+  y: rect.y + window.scrollY,
+  width: rect.width,
+  height: rect.height,
+  tag: el.localName
+};
+})()`, jsString(selector))
+
+	val, err := cdpEvaluate(ws, queryJS, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to evaluate selector %q: %w", selector, err)
+	}
+	info, ok := val.(map[string]any)
+	if !ok || info == nil {
+		return nil, nil, fmt.Errorf("element not found: %s", selector)
+	}
+	found, _ := info["found"].(bool)
+	if !found {
+		return nil, nil, fmt.Errorf("element not found: %s", selector)
+	}
+	w, _ := numberValue(info["width"])
+	h, _ := numberValue(info["height"])
+	x, _ := numberValue(info["x"])
+	y, _ := numberValue(info["y"])
+	if w <= 0 || h <= 0 {
+		return nil, nil, fmt.Errorf("element %q has zero dimensions (width: %.1f, height: %.1f); cannot capture screenshot", selector, w, h)
+	}
+
+	clip := &ScreenshotClip{
+		X:      x,
+		Y:      y,
+		Width:  w,
+		Height: h,
+		Scale:  1.0,
+	}
+	return clip, info, nil
+}

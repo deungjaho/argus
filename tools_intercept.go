@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -12,35 +14,40 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type interceptInput struct {
-	URLPattern string            `json:"url_pattern,omitempty"`
-	URL        string            `json:"url,omitempty"`
-	Pattern    string            `json:"pattern,omitempty"`
-	Method     string            `json:"method,omitempty"`
-	Status     int               `json:"status,omitempty"`
-	Body       string            `json:"body,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Action     string            `json:"action,omitempty"` // mock | block | passthrough
-	Remove     bool              `json:"remove,omitempty"`
-	Target     string            `json:"target,omitempty"`
-	TargetID   string            `json:"target_id,omitempty"`
-	TabID      string            `json:"tab_id,omitempty"`
+type mockRouteInput struct {
+	Action      string            `json:"action,omitempty"`       // mock | block | list | clear | remove (default: mock)
+	URLPattern  string            `json:"url_pattern,omitempty"`  // glob (e.g. "*/api/user*") or regex (e.g. "^https://.*")
+	Pattern     string            `json:"pattern,omitempty"`      // alias for url_pattern
+	URL         string            `json:"url,omitempty"`          // alias for url_pattern
+	Method      string            `json:"method,omitempty"`       // HTTP method filter (GET, POST, etc.)
+	Status      int               `json:"status,omitempty"`       // HTTP status code (default 200 for mock)
+	Headers     map[string]string `json:"headers,omitempty"`      // Custom response headers
+	ContentType string            `json:"content_type,omitempty"` // Convenience helper (e.g. "application/json")
+	Body        any               `json:"body,omitempty"`         // string or JSON object/array/primitive
+	Remove      bool              `json:"remove,omitempty"`       // Convenience boolean alias for action="remove"
+	Target      string            `json:"target,omitempty"`
+	TargetID    string            `json:"target_id,omitempty"`
+	TabID       string            `json:"tab_id,omitempty"`
 }
 
+type interceptInput = mockRouteInput
+
 type interceptRule struct {
-	URLPattern string
-	Method     string
-	Status     int
-	Body       string
-	Headers    map[string]string
-	Action     string
+	URLPattern  string
+	Method      string
+	Status      int
+	Body        string
+	Headers     map[string]string
+	ContentType string
+	Action      string
+	matcher     *regexp.Regexp
 }
 
 // per-target intercept state. Each target (tab) has its own Fetch.enable
 // state, listener goroutine, and subscription. This replaces the global
 // sync.Once which leaked across tab switches and reconnections.
 type interceptState struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	rules        []interceptRule
 	active       bool               // whether Fetch.enable has been called
 	conn         *cdpConn           // conn the listener/Fetch.enable is bound to
@@ -83,10 +90,30 @@ func removeInterceptState(wsURL string) {
 	conn := s.conn
 	wasActive := s.active
 	s.active = false
-	stopInterceptListener(s, wsURL)
 	s.mu.Unlock()
+
+	stopInterceptListener(s, wsURL)
 	if wasActive && conn != nil && conn.alive() {
 		_ = conn.call("Fetch.disable", map[string]any{}, nil, 3*time.Second)
+	}
+}
+
+// removeInterceptStateForTarget drops rules and stops listener for a given target ID.
+func removeInterceptStateForTarget(targetID string) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return
+	}
+	interceptTargetsMu.Lock()
+	var matchingURLs []string
+	for wsURL := range interceptTargets {
+		if shortID(wsURL) == targetID || strings.HasSuffix(wsURL, "/"+targetID) {
+			matchingURLs = append(matchingURLs, wsURL)
+		}
+	}
+	interceptTargetsMu.Unlock()
+	for _, wsURL := range matchingURLs {
+		removeInterceptState(wsURL)
 	}
 }
 
@@ -102,9 +129,9 @@ func rearmInterceptState(conn *cdpConn, wsURL string) {
 	if !ok {
 		return
 	}
+	stopInterceptListener(state, wsURL) // stop stale listener if one survived
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	stopInterceptListener(state, wsURL) // stop stale listener if one survived
 	state.active = false
 	if len(state.rules) == 0 {
 		return
@@ -123,167 +150,361 @@ func rearmInterceptState(conn *cdpConn, wsURL string) {
 
 func registerInterceptTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
-		Name:        "intercept",
-		Description: "Intercept and mock network requests matching a URL pattern. action='mock' returns a fake response (needs status+body), action='block' fails the request, action='passthrough' observes only. Set remove=true to clear a rule. Rules persist until removed or clear_intercepts is called. Rules are per-tab.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input interceptInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("intercept")
+		Name:        "mock_route",
+		Description: "Intercept and mock network requests matching a URL pattern (glob or regex). Returns custom HTTP status, headers, and body. Supports actions: mock (default), block, list, clear, remove.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mockRouteInput) (*mcp.CallToolResult, any, error) {
+		rec := BeginAction("mock_route")
 		defer rec.End()
-
-		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
-			setCurrentTargetID(targetID)
-		}
-		ws, err := requireTargetWS()
+		res, err := executeMockRouteAction(ctx, rec, input)
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		rec.SetTarget(getCurrentTargetID())
-		pattern := resolveFirstNonEmpty(input.URLPattern, input.URL, input.Pattern)
-		input.URLPattern = pattern
-		rec.SetParams(input)
-		if pattern == "" {
-			rec.SetErrorFromError(fmt.Errorf("intercept requires url_pattern"))
-			return nil, nil, fmt.Errorf("intercept requires url_pattern")
-		}
-		state := getInterceptState(ws)
-		state.mu.Lock()
-		defer state.mu.Unlock()
-
-		if input.Remove {
-			filtered := state.rules[:0]
-			for _, rule := range state.rules {
-				if rule.URLPattern != pattern {
-					filtered = append(filtered, rule)
-				}
-			}
-			state.rules = filtered
-			if len(state.rules) == 0 && state.active {
-				_ = cdpRequest(ws, "Fetch.disable", map[string]any{}, nil)
-				state.active = false
-				stopInterceptListener(state, ws)
-			}
-			result := map[string]any{"removed": pattern, "remaining_rules": len(state.rules), "action_id": string(rec.ID)}
-			rec.SetResult(result)
-			return nil, result, nil
-		}
-
-		action := strings.TrimSpace(input.Action)
-		if action == "" {
-			if input.Status > 0 {
-				action = "mock"
-			} else {
-				action = "passthrough"
-			}
-		}
-
-		rule := interceptRule{
-			URLPattern: pattern,
-			Method:     strings.ToUpper(strings.TrimSpace(input.Method)),
-			Status:     input.Status,
-			Body:       input.Body,
-			Headers:    input.Headers,
-			Action:     action,
-		}
-		state.rules = append(state.rules, rule)
-
-		// Enable Fetch domain if not already active
-		if !state.active {
-			if err := cdpRequest(ws, "Fetch.enable", map[string]any{
-				"patterns": []map[string]any{
-					{"urlPattern": "*", "requestStage": "Request"},
-				},
-			}, nil); err != nil {
-				rec.SetErrorFromError(fmt.Errorf("failed to enable Fetch interception: %w", err))
-				return nil, nil, fmt.Errorf("failed to enable Fetch interception: %w", err)
-			}
-			state.active = true
-			startInterceptListener(state, ws)
-		}
-
-		result := map[string]any{
-			"rule_added":  true,
-			"url_pattern": pattern,
-			"method":      rule.Method,
-			"action":      action,
-			"status":      input.Status,
-			"total_rules": len(state.rules),
-			"action_id":   string(rec.ID),
-		}
-		rec.SetResult(result)
-		return nil, result, nil
+		rec.SetResult(res)
+		return nil, res, nil
 	})
+}
 
-	addTool(server, &mcp.Tool{
-		Name:        "list_intercepts",
-		Description: "List all active network interception rules for the current tab.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tabScopeInput) (*mcp.CallToolResult, any, error) {
-		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
-			setCurrentTargetID(targetID)
-		}
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		state := getInterceptState(ws)
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		rules := make([]map[string]any, len(state.rules))
-		for i, rule := range state.rules {
-			rules[i] = map[string]any{
-				"url_pattern": rule.URLPattern,
-				"method":      rule.Method,
-				"action":      rule.Action,
-				"status":      rule.Status,
-			}
-		}
-		return nil, map[string]any{"rules": rules, "count": len(rules)}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "clear_intercepts",
-		Description: "Remove all network interception rules for the current tab and disable request interception.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tabScopeInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("clear_intercepts")
-		defer rec.End()
-
-		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
-			setCurrentTargetID(targetID)
-		}
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
+func executeMockRouteAction(ctx context.Context, rec *ActionRecord, input mockRouteInput) (map[string]any, error) {
+	if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+		setCurrentTargetID(targetID)
+	}
+	ws, err := requireTargetWS()
+	if err != nil {
+		return nil, err
+	}
+	if rec != nil {
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
-		state := getInterceptState(ws)
+	}
+	action := strings.ToLower(strings.TrimSpace(input.Action))
+	if input.Remove {
+		action = "remove"
+	}
+	if action == "" {
+		if input.Status > 0 || input.Body != nil || len(input.Headers) > 0 || input.ContentType != "" {
+			action = "mock"
+		} else {
+			action = "mock"
+		}
+	}
+
+	state := getInterceptState(ws)
+
+	switch action {
+	case "list":
+		state.mu.RLock()
+		routes := make([]map[string]any, 0, len(state.rules))
+		for _, r := range state.rules {
+			item := map[string]any{
+				"url_pattern":  r.URLPattern,
+				"method":       r.Method,
+				"action":       r.Action,
+				"status":       r.Status,
+				"headers":      r.Headers,
+				"content_type": r.ContentType,
+				"body":         r.Body,
+			}
+			routes = append(routes, item)
+		}
+		active := state.active
+		state.mu.RUnlock()
+		return map[string]any{"routes": routes, "count": len(routes), "active": active}, nil
+
+	case "clear":
 		state.mu.Lock()
 		count := len(state.rules)
 		state.rules = state.rules[:0]
 		wasActive := state.active
 		state.active = false
 		state.mu.Unlock()
-
 		if wasActive {
 			_ = cdpRequest(ws, "Fetch.disable", map[string]any{}, nil)
+			stopInterceptListener(state, ws)
 		}
-		stopInterceptListener(state, ws)
-		result := map[string]any{"cleared": count, "action_id": string(rec.ID)}
-		rec.SetResult(result)
-		return nil, result, nil
-	})
+		res := map[string]any{"cleared": count}
+		if rec != nil {
+			res["action_id"] = string(rec.ID)
+		}
+		return res, nil
+
+	case "remove":
+		pattern := resolveFirstNonEmpty(input.URLPattern, input.URL, input.Pattern)
+		if pattern == "" {
+			return nil, fmt.Errorf("remove requires url_pattern or pattern")
+		}
+		method := strings.ToUpper(strings.TrimSpace(input.Method))
+		state.mu.Lock()
+		filtered := state.rules[:0]
+		removedCount := 0
+		for _, rule := range state.rules {
+			if rule.URLPattern == pattern && (method == "" || rule.Method == method) {
+				removedCount++
+				continue
+			}
+			filtered = append(filtered, rule)
+		}
+		state.rules = filtered
+		remaining := len(state.rules)
+		wasActive := state.active && remaining == 0
+		if wasActive {
+			state.active = false
+		}
+		state.mu.Unlock()
+		if wasActive {
+			_ = cdpRequest(ws, "Fetch.disable", map[string]any{}, nil)
+			stopInterceptListener(state, ws)
+		}
+		res := map[string]any{
+			"removed":          pattern,
+			"removed_count":    removedCount,
+			"remaining_routes": remaining,
+		}
+		if rec != nil {
+			res["action_id"] = string(rec.ID)
+		}
+		return res, nil
+
+	case "mock", "block", "passthrough":
+		pattern := resolveFirstNonEmpty(input.URLPattern, input.URL, input.Pattern)
+		if pattern == "" {
+			return nil, fmt.Errorf("mock_route requires url_pattern")
+		}
+		method := strings.ToUpper(strings.TrimSpace(input.Method))
+
+		matcher, isRegex, err := compileRoutePattern(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid route pattern %q: %w", pattern, err)
+		}
+		if matcher == nil {
+			return nil, fmt.Errorf("failed to compile route pattern %q: nil matcher", pattern)
+		}
+
+		status := input.Status
+		if action == "mock" && status <= 0 {
+			status = 200
+		}
+
+		bodyStr := ""
+		isJSON := false
+		if input.Body != nil {
+			switch b := input.Body.(type) {
+			case string:
+				bodyStr = b
+				trimmed := strings.TrimSpace(b)
+				if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+					(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+					isJSON = true
+				}
+			default:
+				marshaled, err := json.Marshal(b)
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode body as JSON: %w", err)
+				}
+				bodyStr = string(marshaled)
+				isJSON = true
+			}
+		}
+
+		headers := make(map[string]string, len(input.Headers)+1)
+		for k, v := range input.Headers {
+			headers[k] = v
+		}
+		contentType := strings.TrimSpace(input.ContentType)
+		if contentType == "" && isJSON {
+			contentType = "application/json"
+		}
+		if contentType != "" {
+			hasCT := false
+			for k := range headers {
+				if strings.EqualFold(k, "content-type") {
+					hasCT = true
+					break
+				}
+			}
+			if !hasCT {
+				headers["Content-Type"] = contentType
+			}
+		}
+
+		rule := interceptRule{
+			URLPattern:  pattern,
+			Method:      method,
+			Status:      status,
+			Body:        bodyStr,
+			Headers:     headers,
+			ContentType: contentType,
+			Action:      action,
+			matcher:     matcher,
+		}
+
+		state.mu.Lock()
+		replaced := false
+		for i := range state.rules {
+			if state.rules[i].URLPattern == pattern && state.rules[i].Method == method {
+				state.rules[i] = rule
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			state.rules = append(state.rules, rule)
+		}
+		needEnable := !state.active
+		totalRules := len(state.rules)
+		state.mu.Unlock()
+
+		if needEnable {
+			if err := cdpRequest(ws, "Fetch.enable", map[string]any{
+				"patterns": []map[string]any{
+					{"urlPattern": "*", "requestStage": "Request"},
+				},
+			}, nil); err != nil {
+				state.mu.Lock()
+				if !replaced {
+					for i := len(state.rules) - 1; i >= 0; i-- {
+						if state.rules[i].URLPattern == pattern && state.rules[i].Method == method {
+							state.rules = append(state.rules[:i], state.rules[i+1:]...)
+							break
+						}
+					}
+				}
+				state.mu.Unlock()
+				return nil, fmt.Errorf("failed to enable Fetch interception: %w", err)
+			}
+			state.mu.Lock()
+			state.active = true
+			state.mu.Unlock()
+			startInterceptListener(state, ws)
+		}
+
+		res := map[string]any{
+			"rule_added":   true,
+			"replaced":     replaced,
+			"action":       action,
+			"url_pattern":  pattern,
+			"method":       method,
+			"status":       status,
+			"content_type": contentType,
+			"is_regex":     isRegex,
+			"total_rules":  totalRules,
+		}
+		if rec != nil {
+			res["action_id"] = string(rec.ID)
+		}
+		return res, nil
+
+	default:
+		return nil, fmt.Errorf("unknown mock_route action: %q", action)
+	}
+}
+
+// compileRoutePattern compiles a pattern into an anchored or unanchored regex.
+func compileRoutePattern(pattern string) (*regexp.Regexp, bool, error) {
+	trimmed := strings.TrimSpace(pattern)
+	if trimmed == "" {
+		return nil, false, fmt.Errorf("empty pattern")
+	}
+
+	// 1. Slash-wrapped regex /pattern/ or /pattern/i
+	if strings.HasPrefix(trimmed, "/") && len(trimmed) > 2 {
+		lastSlash := strings.LastIndex(trimmed, "/")
+		if lastSlash > 0 {
+			flags := trimmed[lastSlash+1:]
+			core := trimmed[1:lastSlash]
+			if flags == "" || flags == "i" {
+				prefix := ""
+				if flags == "i" {
+					prefix = "(?i)"
+				}
+				re, err := regexp.Compile(prefix + core)
+				if err == nil {
+					return re, true, nil
+				}
+			}
+		}
+	}
+
+	// 2. Explicit regex starts with ^, ( or ends with $
+	if strings.HasPrefix(trimmed, "^") || strings.HasSuffix(trimmed, "$") || strings.HasPrefix(trimmed, "(?") {
+		re, err := regexp.Compile(trimmed)
+		if err != nil {
+			return nil, true, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+		return re, true, nil
+	}
+
+	// 3. Glob pattern containing * or ?
+	if strings.ContainsAny(trimmed, "*?") {
+		re, err := globToRegex(trimmed)
+		if err != nil {
+			return nil, false, fmt.Errorf("invalid glob pattern: %w", err)
+		}
+		return re, false, nil
+	}
+
+	// 4. Plain substring match fallback (compatible with strings.Contains)
+	re, err := regexp.Compile(regexp.QuoteMeta(trimmed))
+	if err != nil {
+		return nil, false, err
+	}
+	return re, false, nil
+}
+
+func globToRegex(glob string) (*regexp.Regexp, error) {
+	glob = strings.ReplaceAll(glob, `\/`, `/`)
+	glob = strings.ReplaceAll(glob, `\*`, `*`)
+	glob = strings.ReplaceAll(glob, `\?`, `?`)
+	if !strings.Contains(glob, "://") && !strings.HasPrefix(glob, "*") {
+		glob = "*" + glob
+	}
+	var b strings.Builder
+	b.WriteString("^")
+	i := 0
+	for i < len(glob) {
+		c := glob[i]
+		switch c {
+		case '*':
+			for i+1 < len(glob) && glob[i+1] == '*' {
+				i++
+			}
+			b.WriteString(".*")
+			i++
+		case '?':
+			b.WriteString(".")
+			i++
+		default:
+			start := i
+			for i < len(glob) && glob[i] != '*' && glob[i] != '?' {
+				i++
+			}
+			b.WriteString(regexp.QuoteMeta(glob[start:i]))
+		}
+	}
+	b.WriteString("$")
+	return regexp.Compile(b.String())
 }
 
 // startInterceptListener dials (or reuses) the pooled conn and arms the
-// listener. Called with state.mu held.
+// listener. Safe to call without state.mu held.
 func startInterceptListener(state *interceptState, wsURL string) {
+	state.mu.Lock()
 	if state.sub != nil {
+		state.mu.Unlock()
 		return // already running
 	}
+	state.mu.Unlock()
+
 	conn, err := getConn(wsURL)
 	if err != nil {
 		logWarn("intercept: failed to get connection for listener: %v", err)
 		return
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.sub != nil {
+		return // already armed (e.g. by rearmInterceptState)
 	}
 	armInterceptListener(state, conn, wsURL)
 }
@@ -299,7 +520,8 @@ func armInterceptListener(state *interceptState, conn *cdpConn, wsURL string) {
 	go runInterceptListener(state, wsURL, state.sub, state.stopCh, state.listenerDone)
 }
 
-// stopInterceptListener is called with state.mu held.
+// stopInterceptListener stops the listener goroutine and unsubscribes from events.
+// Must be called without state.mu held so handleRequestPaused can acquire RLock and exit cleanly.
 func stopInterceptListener(state *interceptState, wsURL string) {
 	sub := state.sub
 	state.conn = nil
@@ -376,20 +598,32 @@ func handleRequestPaused(state *interceptState, wsURL string, envelope *browserC
 		return
 	}
 
-	state.mu.Lock()
-	matched := (*interceptRule)(nil)
+	state.mu.RLock()
+	var matched *interceptRule
 	for i := range state.rules {
 		rule := &state.rules[i]
-		if !strings.Contains(params.Request.URL, rule.URLPattern) {
+		if rule.matcher != nil {
+			if !rule.matcher.MatchString(params.Request.URL) {
+				continue
+			}
+		} else {
+			re, _, err := compileRoutePattern(rule.URLPattern)
+			if err == nil {
+				if !re.MatchString(params.Request.URL) {
+					continue
+				}
+			} else if !strings.Contains(params.Request.URL, rule.URLPattern) {
+				continue
+			}
+		}
+		if rule.Method != "" && !strings.EqualFold(rule.Method, params.Request.Method) {
 			continue
 		}
-		if rule.Method != "" && rule.Method != strings.ToUpper(params.Request.Method) {
-			continue
-		}
-		matched = rule
+		ruleCopy := *rule
+		matched = &ruleCopy
 		break
 	}
-	state.mu.Unlock()
+	state.mu.RUnlock()
 
 	if matched == nil {
 		// No matching rule — continue the request
@@ -416,9 +650,14 @@ func handleRequestPaused(state *interceptState, wsURL string, envelope *browserC
 		}
 		// Fetch.fulfillRequest body must be base64-encoded
 		bodyB64 := base64.StdEncoding.EncodeToString([]byte(matched.Body))
+		phrase := http.StatusText(matched.Status)
+		if phrase == "" {
+			phrase = "Custom"
+		}
 		if err := cdpRequest(wsURL, "Fetch.fulfillRequest", map[string]any{
 			"requestId":       params.RequestID,
 			"responseCode":    matched.Status,
+			"responsePhrase":  phrase,
 			"responseHeaders": responseHeaders,
 			"body":            bodyB64,
 		}, nil); err != nil {

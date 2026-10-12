@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,17 +30,7 @@ type a11ySnapshotInput struct {
 	TabID    string `json:"tab_id,omitempty"`
 }
 
-type findInput struct {
-	Text     string `json:"text,omitempty"`
-	Regex    string `json:"regex,omitempty"`
-	Query    string `json:"query,omitempty"`
-	Pattern  string `json:"pattern,omitempty"`
-	Selector string `json:"selector,omitempty"`
-	Ref      string `json:"ref,omitempty"`
-	CSS      string `json:"css,omitempty"`
-	XPath    string `json:"xpath,omitempty"`
-	Target   string `json:"target,omitempty"`
-}
+type findInput = getElementInput
 
 type lookInput struct {
 	MaxElements int    `json:"max_elements,omitempty"`
@@ -258,82 +247,18 @@ func registerSnapshotTools(server *mcp.Server) {
 		if maxDepth > 0 {
 			nodes = filterA11yByDepth(nodes, maxDepth)
 		}
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
+		if targetID == "" {
+			targetID = targetIDFromWSURL(ws)
+		}
+		for _, n := range nodes {
+			nodeID := extractAXNodeID(n["nodeId"])
+			if nodeID != "" {
+				n["ref"] = "ax:" + nodeID
+			}
+		}
+		storeA11yTree(targetID, nodes)
 		return nil, map[string]any{"nodes": nodes, "count": len(nodes)}, nil
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "inspect_point",
-		Description: "Inspect what is under a viewport coordinate or screenshot image coordinate. Returns elementFromPoint details and nearby text/ARIA info.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input inspectPointInput) (*mcp.CallToolResult, any, error) {
-		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
-			setCurrentTargetID(targetID)
-		}
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		x, y, err := resolveInspectPoint(ws, input)
-		if err != nil {
-			return nil, nil, err
-		}
-		value, err := cdpEvaluate(ws, inspectPointExpression(x, y), true)
-		return nil, value, err
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "find",
-		Description: "Search the page for text or a regular expression. Returns matching elements with their CSS refs, text snippets, and bounding boxes. Cheaper than a full snapshot when you only need to locate an element. Output is bounded to 5 matches with truncation metadata.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input findInput) (*mcp.CallToolResult, any, error) {
-		ws, err := requireTargetWS()
-		if err != nil {
-			return nil, nil, err
-		}
-		text := resolveFirstNonEmpty(input.Text, input.Query, input.Pattern)
-		regex := strings.TrimSpace(input.Regex)
-		if text == "" && regex == "" {
-			if sel := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, ""); sel != "" {
-				text = sel
-			}
-		}
-		if text == "" && regex == "" {
-			return nil, nil, fmt.Errorf("find requires text, regex, or query")
-		}
-		value, err := cdpEvaluate(ws, findExpression(text, regex), true)
-		if err != nil {
-			return nil, nil, err
-		}
-		// Enforce capping and text truncation in Go as defense-in-depth
-		if info, ok := value.(map[string]any); ok && info != nil {
-			if rawMatches, ok := info["matches"].([]any); ok {
-				for _, raw := range rawMatches {
-					if mm, ok := raw.(map[string]any); ok {
-						if t, ok := mm["text"].(string); ok {
-							runes := []rune(t)
-							if len(runes) > 100 {
-								mm["text"] = string(runes[:100])
-							}
-						}
-					}
-				}
-				if len(rawMatches) > 5 {
-					info["matches"] = rawMatches[:5]
-					info["count"] = 5
-				}
-			}
-			// Attach typed TruncationMeta derived from the JS result so agents
-			// can detect bounded output without parsing nested fields.
-			total, _ := numberValue(info["total_count"])
-			shown, _ := numberValue(info["count"])
-			if total > 0 || shown > 0 {
-				attachTruncation(info, newTruncationMeta(int(total), int(shown), "max_matches"))
-			}
-			// Attach typed AmbiguityInfo so consumers can branch on the
-			// structured ambiguity fields without re-parsing the JS result.
-			if amb, ok := ambiguityFromMap(info); ok {
-				info["ambiguity"] = amb
-			}
-		}
-		return nil, value, err
 	})
 }
 
@@ -347,16 +272,44 @@ const domAutoSettleScript = `(() => {
     const quietWindow = 40;
     const startTime = Date.now();
     let lastMutation = 0;
+    let addedCount = 0;
+    let removedCount = 0;
+    let statusText = '';
+
+    const getStatusText = () => {
+      const el = document.querySelector('[role="alert"], [role="status"], .toast, .alert, .el-message, .ant-message, [aria-live="polite"], [aria-live="assertive"]');
+      if (el && el.textContent) return el.textContent.trim().slice(0, 100);
+      return '';
+    };
 
     const done = () => {
       if (observer) observer.disconnect();
       if (timeoutId) clearTimeout(timeoutId);
       if (rafId) cancelAnimationFrame(rafId);
-      resolve(true);
+      if (!statusText) statusText = getStatusText();
+      resolve({
+        settled: true,
+        url: location.href,
+        added_count: addedCount,
+        removed_count: removedCount,
+        status_text: statusText
+      });
     };
 
-    observer = new MutationObserver(() => {
+    observer = new MutationObserver((mutations) => {
       lastMutation = Date.now();
+      for (const m of mutations) {
+        if (m.type === 'childList') {
+          addedCount += m.addedNodes.length;
+          removedCount += m.removedNodes.length;
+          for (const node of m.addedNodes) {
+            if (node.nodeType === 1 && !statusText) {
+              const txt = (node.innerText || node.textContent || '').trim();
+              if (txt) statusText = txt.slice(0, 100);
+            }
+          }
+        }
+      }
     });
     const targetNode = document.body || document.documentElement;
     if (targetNode) {
@@ -384,13 +337,38 @@ const domAutoSettleScript = `(() => {
   });
 })()`
 
-// miniSnapshot captures a compact page snapshot (summary + interactive
-// elements, max 20) and returns {"summary": "...", "elements": [...]}.
-// It is non-fatal: any failure returns nil so the calling operation's
-// result is never blocked.
+// autoSettleDOM runs domAutoSettleScript and extracts DOM mutation counts,
+// status text, and the latest URL.
+func autoSettleDOM(ws string) (map[string]any, string) {
+	val, err := cdpEvaluateTimeout(ws, domAutoSettleScript, true, 500*time.Millisecond)
+	if err != nil || val == nil {
+		return map[string]any{"added_count": 0, "removed_count": 0, "status_text": ""}, ""
+	}
+	m, ok := val.(map[string]any)
+	if !ok {
+		return map[string]any{"added_count": 0, "removed_count": 0, "status_text": ""}, ""
+	}
+	curURL, _ := m["url"].(string)
+	added, _ := numberValue(m["added_count"])
+	removed, _ := numberValue(m["removed_count"])
+	statusText, _ := m["status_text"].(string)
+
+	domChanges := map[string]any{
+		"added_count":   int(added),
+		"removed_count": int(removed),
+		"status_text":   statusText,
+	}
+	return domChanges, curURL
+}
+
 func miniSnapshot(ws string) map[string]any {
-	// Auto-settle DOM before snapshot so async portals, animations, and transitions are captured.
-	_, _ = cdpEvaluateTimeout(ws, domAutoSettleScript, true, 500*time.Millisecond)
+	_, _ = autoSettleDOM(ws)
+	return miniSnapshotOnly(ws)
+}
+
+// miniSnapshotOnly captures a compact page snapshot (summary + interactive
+// elements, max 20) and returns {"summary": "...", "elements": [...]}.
+func miniSnapshotOnly(ws string) map[string]any {
 	value, err := cdpEvaluate(ws, lookExpression(20), true)
 	if err != nil {
 		return nil
@@ -415,18 +393,7 @@ func miniSnapshot(ws string) map[string]any {
 	}
 }
 
-type inspectPointInput struct {
-	X              *float64 `json:"x,omitempty"`
-	Y              *float64 `json:"y,omitempty"`
-	ImageX         *float64 `json:"image_x,omitempty"`
-	ImageY         *float64 `json:"image_y,omitempty"`
-	ImageWidth     *float64 `json:"image_width,omitempty"`
-	ImageHeight    *float64 `json:"image_height,omitempty"`
-	ScreenshotPath string   `json:"screenshot_path,omitempty"`
-	Target         string   `json:"target,omitempty"`
-	TargetID       string   `json:"target_id,omitempty"`
-	TabID          string   `json:"tab_id,omitempty"`
-}
+type inspectPointInput = getElementInput
 
 func resolveInspectPoint(ws string, input inspectPointInput) (float64, float64, error) {
 	if x, y, ok, err := pointFromImageCoordinates(ws, input.ImageX, input.ImageY, input.ImageWidth, input.ImageHeight, input.ScreenshotPath); ok || err != nil {

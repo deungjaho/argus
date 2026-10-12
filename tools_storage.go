@@ -9,170 +9,167 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// --- get_storage ---
-
-type getStorageInput struct {
-	Type        string `json:"type,omitempty"` // cookie | local | session
-	StorageType string `json:"storage_type,omitempty"`
-	Target      string `json:"target,omitempty"`
-	Key         string `json:"key,omitempty"` // optional: get specific key
-	Name        string `json:"name,omitempty"`
+// storageInput represents parameters for the unified canonical storage management tool.
+type storageInput struct {
+	Action      string `json:"action,omitempty"`       // "get" | "set" | "clear" (default: "get")
+	Type        string `json:"type,omitempty"`         // "cookie" | "local" | "session" | "all"
+	StorageType string `json:"storage_type,omitempty"` // alias for type
+	Target      string `json:"target,omitempty"`       // alias for type
+	Key         string `json:"key,omitempty"`          // cookie name or storage key
+	Name        string `json:"name,omitempty"`         // alias for key
+	Value       string `json:"value,omitempty"`        // value to write (for set)
+	Domain      string `json:"domain,omitempty"`       // cookie only
+	Path        string `json:"path,omitempty"`         // cookie only (default: /)
+	MaxAge      int    `json:"max_age,omitempty"`      // cookie only (seconds)
 }
 
-// --- set_storage ---
-
-type setStorageInput struct {
-	Type        string `json:"type,omitempty"` // cookie | local | session
-	StorageType string `json:"storage_type,omitempty"`
-	Target      string `json:"target,omitempty"`
-	Key         string `json:"key,omitempty"` // cookie name or storage key
-	Name        string `json:"name,omitempty"`
-	Value       string `json:"value,omitempty"`   // cookie value or storage value
-	Domain      string `json:"domain,omitempty"`  // cookie only
-	Path        string `json:"path,omitempty"`    // cookie only (default /)
-	MaxAge      int    `json:"max_age,omitempty"` // cookie only (seconds)
-}
-
-// --- clear_storage ---
-
-type clearStorageInput struct {
-	Type        string `json:"type,omitempty"` // all | cookie | local | session
-	StorageType string `json:"storage_type,omitempty"`
-	Target      string `json:"target,omitempty"`
-}
+// Backward-compatibility struct aliases
+type getStorageInput = storageInput
+type setStorageInput = storageInput
+type clearStorageInput = storageInput
 
 func registerStorageTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
-		Name:        "get_storage",
-		Description: "Get browser storage: cookies, localStorage, or sessionStorage. If key is specified, returns only that key's value. Otherwise returns all entries.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input getStorageInput) (*mcp.CallToolResult, any, error) {
+		Name:        "storage",
+		Description: "Browser storage CRUD: action can be 'get', 'set', or 'clear'. Type can be 'cookie', 'local', 'session', or 'all' (for clear). For set: specify key and value.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input storageInput) (*mcp.CallToolResult, any, error) {
 		ws, err := requireTargetWS()
 		if err != nil {
 			return nil, nil, err
 		}
+
+		action := resolveStorageAction(input.Action, input.Value)
+
 		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
 		key := resolveFirstNonEmpty(input.Key, input.Name)
-		switch storageType {
-		case "cookie":
-			return getCookieStorage(ws, key)
-		case "local":
-			return getJSStorage(ws, "localStorage", key)
-		case "session":
-			return getJSStorage(ws, "sessionStorage", key)
+
+		switch action {
+		case "get":
+			switch storageType {
+			case "cookie":
+				return getCookieStorage(ws, key)
+			case "local":
+				return getJSStorage(ws, "localStorage", key)
+			case "session":
+				return getJSStorage(ws, "sessionStorage", key)
+			default:
+				return nil, nil, fmt.Errorf("storage get type must be 'cookie', 'local', or 'session'")
+			}
+
+		case "set":
+			rec := BeginAction("storage:set")
+			defer rec.End()
+			rec.SetTarget(getCurrentTargetID())
+			rec.SetParams(input)
+
+			if key == "" {
+				err := fmt.Errorf("storage set requires key")
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+
+			switch storageType {
+			case "cookie":
+				input.Key = key
+				rr, res, err := setCookieStorage(ws, input, rec.ID)
+				if err != nil {
+					rec.SetErrorFromError(err)
+				} else {
+					rec.SetResult(res)
+				}
+				return rr, res, err
+			case "local":
+				rr, res, err := setJSStorage(ws, "localStorage", key, input.Value, rec.ID)
+				if err != nil {
+					rec.SetErrorFromError(err)
+				} else {
+					rec.SetResult(res)
+				}
+				return rr, res, err
+			case "session":
+				rr, res, err := setJSStorage(ws, "sessionStorage", key, input.Value, rec.ID)
+				if err != nil {
+					rec.SetErrorFromError(err)
+				} else {
+					rec.SetResult(res)
+				}
+				return rr, res, err
+			default:
+				err := fmt.Errorf("storage set type must be 'cookie', 'local', or 'session'")
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+
+		case "clear":
+			rec := BeginAction("storage:clear")
+			defer rec.End()
+			rec.SetTarget(getCurrentTargetID())
+			rec.SetParams(input)
+
+			if storageType == "" {
+				storageType = "all"
+			}
+			results := map[string]any{}
+			switch storageType {
+			case "all":
+				r1, _ := clearCookieStorage(ws)
+				r2, _ := clearJSStorage(ws, "localStorage")
+				r3, _ := clearJSStorage(ws, "sessionStorage")
+				results["cookie"] = r1
+				results["local"] = r2
+				results["session"] = r3
+			case "cookie":
+				r, err := clearCookieStorage(ws)
+				results["cookie"] = r
+				if err != nil {
+					results["action_id"] = string(rec.ID)
+					rec.SetErrorFromError(err)
+					rec.SetResult(results)
+					return nil, results, err
+				}
+			case "local":
+				r, err := clearJSStorage(ws, "localStorage")
+				results["local"] = r
+				if err != nil {
+					results["action_id"] = string(rec.ID)
+					rec.SetErrorFromError(err)
+					rec.SetResult(results)
+					return nil, results, err
+				}
+			case "session":
+				r, err := clearJSStorage(ws, "sessionStorage")
+				results["session"] = r
+				if err != nil {
+					results["action_id"] = string(rec.ID)
+					rec.SetErrorFromError(err)
+					rec.SetResult(results)
+					return nil, results, err
+				}
+			default:
+				err := fmt.Errorf("storage clear type must be 'all', 'cookie', 'local', or 'session'")
+				rec.SetErrorFromError(err)
+				return nil, nil, err
+			}
+			results["action_id"] = string(rec.ID)
+			rec.SetResult(results)
+			return nil, results, nil
+
 		default:
-			return nil, nil, fmt.Errorf("type must be cookie, local, or session")
+			return nil, nil, fmt.Errorf("unknown storage action %q: must be 'get', 'set', or 'clear'", input.Action)
 		}
 	})
+}
 
-	addTool(server, &mcp.Tool{
-		Name:        "set_storage",
-		Description: "Set browser storage: a cookie, a localStorage key, or a sessionStorage key. For cookies, domain defaults to current page domain.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input setStorageInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("set_storage")
-		defer rec.End()
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
+// resolveStorageAction normalizes the storage action or infers it based on value presence.
+func resolveStorageAction(action, value string) string {
+	act := strings.ToLower(strings.TrimSpace(action))
+	if act == "" {
+		if value != "" {
+			return "set"
 		}
-		rec.SetTarget(getCurrentTargetID())
-		rec.SetParams(input)
-		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
-		input.Key = resolveFirstNonEmpty(input.Key, input.Name)
-		switch storageType {
-		case "cookie":
-			rr, res, err := setCookieStorage(ws, input, rec.ID)
-			if err != nil {
-				rec.SetErrorFromError(err)
-			} else {
-				rec.SetResult(res)
-			}
-			return rr, res, err
-		case "local":
-			rr, res, err := setJSStorage(ws, "localStorage", input.Key, input.Value, rec.ID)
-			if err != nil {
-				rec.SetErrorFromError(err)
-			} else {
-				rec.SetResult(res)
-			}
-			return rr, res, err
-		case "session":
-			rr, res, err := setJSStorage(ws, "sessionStorage", input.Key, input.Value, rec.ID)
-			if err != nil {
-				rec.SetErrorFromError(err)
-			} else {
-				rec.SetResult(res)
-			}
-			return rr, res, err
-		default:
-			rec.SetErrorFromError(fmt.Errorf("type must be cookie, local, or session"))
-			return nil, nil, fmt.Errorf("type must be cookie, local, or session")
-		}
-	})
-
-	addTool(server, &mcp.Tool{
-		Name:        "clear_storage",
-		Description: "Clear browser storage: all cookies, all localStorage, all sessionStorage, or everything.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input clearStorageInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("clear_storage")
-		defer rec.End()
-
-		ws, err := requireTargetWS()
-		if err != nil {
-			rec.SetErrorFromError(err)
-			return nil, nil, err
-		}
-		rec.SetTarget(getCurrentTargetID())
-		rec.SetParams(input)
-		storageType := resolveStorageType(resolveFirstNonEmpty(input.Type, input.StorageType, input.Target))
-		if storageType == "" {
-			storageType = "all"
-		}
-		results := map[string]any{}
-		switch storageType {
-		case "all":
-			r1, _ := clearCookieStorage(ws)
-			r2, _ := clearJSStorage(ws, "localStorage")
-			r3, _ := clearJSStorage(ws, "sessionStorage")
-			results["cookie"] = r1
-			results["local"] = r2
-			results["session"] = r3
-		case "cookie":
-			r, err := clearCookieStorage(ws)
-			results["cookie"] = r
-			if err != nil {
-				results["action_id"] = string(rec.ID)
-				rec.SetErrorFromError(err)
-				rec.SetResult(results)
-				return nil, results, err
-			}
-		case "local":
-			r, err := clearJSStorage(ws, "localStorage")
-			results["local"] = r
-			if err != nil {
-				results["action_id"] = string(rec.ID)
-				rec.SetErrorFromError(err)
-				rec.SetResult(results)
-				return nil, results, err
-			}
-		case "session":
-			r, err := clearJSStorage(ws, "sessionStorage")
-			results["session"] = r
-			if err != nil {
-				results["action_id"] = string(rec.ID)
-				rec.SetErrorFromError(err)
-				rec.SetResult(results)
-				return nil, results, err
-			}
-		default:
-			rec.SetErrorFromError(fmt.Errorf("type must be all, cookie, local, or session"))
-			return nil, nil, fmt.Errorf("type must be all, cookie, local, or session")
-		}
-		results["action_id"] = string(rec.ID)
-		rec.SetResult(results)
-		return nil, results, nil
-	})
+		return "get"
+	}
+	return act
 }
 
 // --- cookie implementation via CDP ---

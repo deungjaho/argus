@@ -8,7 +8,7 @@ LDFLAGS := -s -w
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 
-.PHONY: all build install uninstall test vet fmt fmt-check clean
+.PHONY: all build install uninstall test test-race test-e2e vet fmt fmt-check clean
 
 all: build
 
@@ -23,7 +23,13 @@ uninstall:
 	rm -f $(BINDIR)/argus
 
 test:
-	go test -count=1 -timeout 60s ./...
+	ARGUS_ATTACH=1 ARGUS_CDP_PORT=59999 go test -short -count=1 -timeout 120s ./...
+
+test-race:
+	ARGUS_ATTACH=1 ARGUS_CDP_PORT=59999 go test -short -count=1 -race -timeout 300s ./...
+
+test-e2e:
+	go test -tags=integration -count=1 -timeout 300s ./...
 
 vet:
 	go vet ./...

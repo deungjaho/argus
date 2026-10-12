@@ -195,15 +195,10 @@ func registerAllTools(server *mcp.Server) {
 	registerTabTools(server)
 	registerWaitTools(server)
 	registerEmulateTools(server)
-	registerInspectTools(server)
 	registerStorageTools(server)
 	registerElementTools(server)
 	registerInterceptTools(server)
-	registerMiscTools(server)
 	registerTraceTools(server)
-	registerDiscoveryTools(server)
-	registerDiffTools(server)
-	registerRecordTools(server)
 }
 
 // runDoctor runs diagnostic checks and exits.

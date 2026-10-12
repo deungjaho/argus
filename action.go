@@ -63,10 +63,20 @@ func formatUintPadded(n uint64, width int) string {
 // global currentAction that breaks under interleaved actions.
 func BeginAction(op string) *ActionRecord {
 	id := nextActionID()
+	targetID := getCurrentTargetID()
+	var startURL string
+	var startReqs int64
+	if targetID != "" {
+		startURL = rec.CurrentURL(targetID)
+		startReqs = rec.ActiveRequestCount(targetID)
+	}
 	return &ActionRecord{
-		ID:        id,
-		Op:        op,
-		StartTime: time.Now(),
+		ID:                id,
+		Op:                op,
+		TargetID:          targetID,
+		StartTime:         time.Now(),
+		StartURL:          startURL,
+		StartRequestCount: startReqs,
 	}
 }
 
@@ -87,6 +97,30 @@ func (r *ActionRecord) SetTarget(targetID string) {
 		return
 	}
 	r.TargetID = targetID
+	if r.StartURL == "" && targetID != "" {
+		r.StartURL = rec.CurrentURL(targetID)
+	}
+	if r.StartRequestCount == 0 && targetID != "" {
+		r.StartRequestCount = rec.ActiveRequestCount(targetID)
+	}
+}
+
+// CaptureInitialState captures the target URL and in-flight request count
+// if not already captured at BeginAction.
+func (r *ActionRecord) CaptureInitialState(ws string) {
+	if r == nil || ws == "" {
+		return
+	}
+	targetID := targetIDFromWSURL(ws)
+	if r.TargetID == "" && targetID != "" {
+		r.TargetID = targetID
+	}
+	if r.StartURL == "" && targetID != "" {
+		r.StartURL = rec.CurrentURL(targetID)
+	}
+	if r.StartRequestCount == 0 && targetID != "" {
+		r.StartRequestCount = rec.ActiveRequestCount(targetID)
+	}
 }
 
 // SetError records an error on the action record.
@@ -117,6 +151,224 @@ func attachEvidence(ar *ActionRecord, wsURL string, result map[string]any) {
 	if ev := rec.EvidenceSince(targetIDFromWSURL(wsURL), ar.StartTime); ev != nil {
 		result["evidence"] = ev
 	}
+}
+
+// VerificationPayload represents the causal verification feedback returned
+// alongside page miniSnapshot on interactive actions.
+type VerificationPayload struct {
+	Navigated       bool             `json:"navigated"`
+	CurrentURL      string           `json:"current_url"`
+	NetworkRequests []map[string]any `json:"network_requests"`
+	DOMChanges      map[string]any   `json:"dom_changes"`
+	DialogHandled   map[string]any   `json:"dialog_handled,omitempty"`
+	DevOverlay      *DevOverlayError `json:"dev_overlay,omitempty"`
+	Verified        bool             `json:"verified"`
+}
+
+// collectVerification gathers causal events (URL change, triggered requests,
+// DOM mutations) observed on targetID during this action's window.
+func (r *ActionRecord) collectVerification(ws string, domChanges map[string]any, currentURL string) map[string]any {
+	if r == nil {
+		return nil
+	}
+	targetID := r.TargetID
+	if targetID == "" && ws != "" {
+		targetID = targetIDFromWSURL(ws)
+	}
+
+	// 1. Navigation verification
+	navigated := false
+	if currentURL == "" && targetID != "" {
+		currentURL = rec.CurrentURL(targetID)
+	}
+	if currentURL != "" && r.StartURL != "" && currentURL != r.StartURL {
+		navigated = true
+	}
+	if !navigated && targetID != "" {
+		navEvents := rec.QueryEvents(EventFilter{targetID: targetID, since: r.StartTime, limit: 20})
+		for _, e := range navEvents {
+			if e.Type == "navigation" {
+				navigated = true
+				if currentURL == "" {
+					if ne, ok := e.Data.(NavigationEvidence); ok && ne.URL != "" {
+						currentURL = ne.URL
+					}
+				}
+				break
+			}
+		}
+	}
+	if currentURL == "" {
+		currentURL = r.StartURL
+	}
+	if currentURL != "" && targetID != "" {
+		rec.SetCurrentURL(targetID, currentURL)
+	}
+
+	// 2. Network verification
+	netReqs := rec.NetworkRequestsSince(targetID, r.StartTime)
+	if netReqs == nil {
+		netReqs = []map[string]any{}
+	}
+
+	// 3. DOM mutation verification
+	if domChanges == nil {
+		domChanges = map[string]any{
+			"added_count":   0,
+			"removed_count": 0,
+			"status_text":   "",
+		}
+	}
+	addedCount, _ := numberValue(domChanges["added_count"])
+	removedCount, _ := numberValue(domChanges["removed_count"])
+
+	// 4. Dialog handled verification (CDP Dialog Anti-Deadlock)
+	var dialogHandled map[string]any
+	if targetID != "" {
+		dialogEvents := rec.QueryEvents(EventFilter{targetID: targetID, since: r.StartTime, limit: 10})
+		for _, e := range dialogEvents {
+			if e.Type == "dialog" {
+				if m, ok := e.Data.(map[string]any); ok {
+					if dialogHandled == nil {
+						// Clone newest event data to preserve terminal status while allowing metadata backfill
+						dialogHandled = make(map[string]any, len(m)+2)
+						for k, v := range m {
+							dialogHandled[k] = v
+						}
+					}
+					// Ensure type and message are populated from earlier opening/handled events if missing
+					if msg, _ := dialogHandled["message"].(string); msg == "" {
+						if prevMsg, _ := m["message"].(string); prevMsg != "" {
+							dialogHandled["message"] = prevMsg
+						}
+					}
+					if dt, _ := dialogHandled["type"].(string); dt == "" {
+						if prevType, _ := m["type"].(string); prevType != "" {
+							dialogHandled["type"] = prevType
+						}
+					}
+					// Stop once we have complete type and message
+					msg, _ := dialogHandled["message"].(string)
+					dt, _ := dialogHandled["type"].(string)
+					if msg != "" && dt != "" {
+						break
+					}
+				}
+			}
+		}
+		if dialogHandled != nil {
+			// Fallback: If type or message is still empty, consult TargetDialogState
+			if msg, _ := dialogHandled["message"].(string); msg == "" {
+				if state := dialogMgr.Get(targetID); state != nil {
+					if last := state.Last(); last != nil && last.Message != "" {
+						dialogHandled["message"] = last.Message
+					}
+				}
+			}
+			if dt, _ := dialogHandled["type"].(string); dt == "" {
+				if state := dialogMgr.Get(targetID); state != nil {
+					if last := state.Last(); last != nil && last.Type != "" {
+						dialogHandled["type"] = last.Type
+					}
+				}
+			}
+		} else {
+			// If no events found in recorder, check if dialog was handled during this action window
+			if state := dialogMgr.Get(targetID); state != nil {
+				if last := state.LastHandled(); last != nil && !last.HandledAt.IsZero() && !last.HandledAt.Before(r.StartTime) {
+					status := "closed"
+					if last.AutoHandled {
+						if last.HandledAction == "accept" {
+							status = "auto_accepted"
+						} else {
+							status = "auto_dismissed"
+						}
+					}
+					dialogHandled = map[string]any{
+						"type":    last.Type,
+						"message": last.Message,
+						"status":  status,
+					}
+				}
+			}
+			// Or check if a dialog is currently open and pending
+			if dialogHandled == nil && dialogMgr.HasPendingDialog(targetID) {
+				d := dialogMgr.GetPendingDialog(targetID)
+				dialogHandled = map[string]any{
+					"type":    d.Type,
+					"message": d.Message,
+					"status":  "pending",
+				}
+			}
+		}
+	}
+
+	// 4b. Dev overlay detection in causal verification (Feature F11)
+	var devOverlay *DevOverlayError
+	if ws != "" && !dialogMgr.HasPendingDialog(targetID) {
+		if o, _ := checkDevOverlay(ws); o != nil && o.Detected {
+			devOverlay = o
+		}
+	}
+
+	// 5. Causal success determination
+	verified := navigated || len(netReqs) > 0 || addedCount > 0 || removedCount > 0 || dialogHandled != nil
+	if devOverlay != nil {
+		verified = false
+	}
+	if r.Op == "fill" || r.Op == "type" || r.Op == "scroll" {
+		verified = true
+		if devOverlay != nil {
+			verified = false
+		}
+	}
+
+	v := map[string]any{
+		"navigated":        navigated,
+		"current_url":      currentURL,
+		"network_requests": netReqs,
+		"dom_changes":      domChanges,
+		"verified":         verified,
+	}
+	if dialogHandled != nil {
+		v["dialog_handled"] = dialogHandled
+	}
+	if devOverlay != nil {
+		v["dev_overlay"] = devOverlay
+	}
+	return v
+}
+
+// attachVerification adds the "verification" object into the tool result map.
+func attachVerification(ar *ActionRecord, ws string, result map[string]any, domChanges map[string]any, currentURL string) {
+	if ar == nil || result == nil {
+		return
+	}
+	v := ar.collectVerification(ws, domChanges, currentURL)
+	result["verification"] = v
+}
+
+// settleAndCaptureVerification runs the DOM auto-settle probe, gathers
+// post-action miniSnapshot and causal verification payload, and attaches
+// "page", "verification", and "evidence" to the result map.
+func settleAndCaptureVerification(ar *ActionRecord, ws string, result map[string]any) {
+	if ar == nil || result == nil {
+		return
+	}
+	var domChanges map[string]any
+	var curURL string
+	targetID := targetIDFromWSURL(ws)
+	if ws != "" && !dialogMgr.HasPendingDialog(targetID) {
+		domChanges, curURL = autoSettleDOM(ws)
+		if !dialogMgr.HasPendingDialog(targetID) {
+			if page := miniSnapshotOnly(ws); page != nil {
+				result["page"] = page
+			}
+		}
+	}
+	attachVerification(ar, ws, result, domChanges, curURL)
+	attachEvidence(ar, ws, result)
+	ar.SetResult(result)
 }
 
 // SetParams records a sanitized, truncated summary of the action's
@@ -165,14 +417,16 @@ func truncateSummary(v any, maxLen int) any {
 // --- Action record (for future recorder) ---
 
 type ActionRecord struct {
-	ID        ActionID   `json:"id"`
-	Op        string     `json:"op"` // tool name: "click", "navigate", etc.
-	TargetID  string     `json:"target_id"`
-	StartTime time.Time  `json:"start_time"`
-	EndTime   *time.Time `json:"end_time,omitempty"`
-	Params    any        `json:"params,omitempty"` // sanitized input
-	Result    any        `json:"result,omitempty"` // sanitized output
-	Error     *ToolError `json:"error,omitempty"`
+	ID                ActionID   `json:"id"`
+	Op                string     `json:"op"` // tool name: "click", "navigate", etc.
+	TargetID          string     `json:"target_id"`
+	StartTime         time.Time  `json:"start_time"`
+	EndTime           *time.Time `json:"end_time,omitempty"`
+	StartURL          string     `json:"start_url,omitempty"`
+	StartRequestCount int64      `json:"start_request_count,omitempty"`
+	Params            any        `json:"params,omitempty"` // sanitized input
+	Result            any        `json:"result,omitempty"` // sanitized output
+	Error             *ToolError `json:"error,omitempty"`
 }
 
 // --- Event record (for future recorder) ---

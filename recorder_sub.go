@@ -246,6 +246,7 @@ func handleNetworkRequestEvent(envelope *browserCDPEnvelope, targetID string, ep
 		Phase:        "request",
 	}
 
+	rec.OnRequestStart(targetID, params.RequestID)
 	rec.RecordEventWithAction("network", targetID, "", epoch, evidence)
 }
 
@@ -281,6 +282,7 @@ func handleNetworkResponseEvent(envelope *browserCDPEnvelope, targetID string, e
 		Phase:        "response",
 	}
 
+	rec.OnRequestEnd(targetID, params.RequestID)
 	rec.RecordEventWithAction("network", targetID, "", epoch, evidence)
 }
 
@@ -307,6 +309,7 @@ func handleNetworkFailedEvent(envelope *browserCDPEnvelope, targetID string, epo
 		Phase:        "failed",
 	}
 
+	rec.OnRequestEnd(targetID, params.RequestID)
 	rec.RecordEventWithAction("network", targetID, "", epoch, evidence)
 }
 
@@ -349,6 +352,10 @@ func handleFrameNavigatedEvent(envelope *browserCDPEnvelope, targetID string, ep
 		NavigationType: truncateNavType(params.Type),
 		MimeType:       truncateNavType(params.Frame.MimeType),
 		Phase:          "frameNavigated",
+	}
+
+	if params.Frame.ParentID == "" && params.Frame.URL != "" {
+		rec.SetCurrentURL(targetID, sanitizeURL(params.Frame.URL))
 	}
 
 	rec.RecordEventWithAction("navigation", targetID, "", epoch, evidence)
@@ -433,6 +440,10 @@ func handleNavigatedWithinDocumentEvent(envelope *browserCDPEnvelope, targetID s
 		URL:            sanitizeURL(params.URL),
 		NavigationType: "SameDocument",
 		Phase:          "navigatedWithinDocument",
+	}
+
+	if params.URL != "" {
+		rec.SetCurrentURL(targetID, sanitizeURL(params.URL))
 	}
 
 	rec.RecordEventWithAction("navigation", targetID, "", epoch, evidence)

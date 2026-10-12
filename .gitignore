@@ -18,3 +18,7 @@ Thumbs.db
 # Coverage
 *.out
 coverage.txt
+
+# Agent session artifacts
+.agents/
+docs/work-histroy/

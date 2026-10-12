@@ -487,3 +487,44 @@ func TestRecorderClearResetsEpochs(t *testing.T) {
 		t.Fatalf("epoch after clear = %q, want epoch_0000", epoch)
 	}
 }
+
+// TestRecorderActionIDCachingInRingBuffer verifies that attributing an event
+// caches its ActionID back to the internal ring buffer so repeated queries are O(1).
+func TestRecorderActionIDCachingInRingBuffer(t *testing.T) {
+	restore := withTestRecorder(10, 10)
+	defer restore()
+
+	actionRec := &ActionRecord{
+		ID:        "act_cached_1",
+		Op:        "click",
+		TargetID:  "tab1",
+		StartTime: time.Now().Add(-2 * time.Second),
+	}
+	time.Sleep(5 * time.Millisecond)
+	rec.RecordEvent("console", "tab1", map[string]any{"text": "cached log"})
+	now := time.Now()
+	actionRec.EndTime = &now
+	rec.RecordAction(actionRec)
+
+	// First query: triggers attribution and writes back to r.events[idx].ActionID
+	events1 := rec.QueryEvents(EventFilter{})
+	if len(events1) != 1 || events1[0].ActionID != "act_cached_1" {
+		t.Fatalf("expected 1 event attributed to act_cached_1, got %+v", events1)
+	}
+
+	// Verify the underlying ring buffer holds the cached ActionID
+	rec.mu.Lock()
+	headIdx := (rec.evtHead - 1 + rec.evtCap) % rec.evtCap
+	cachedActionID := rec.events[headIdx].ActionID
+	rec.mu.Unlock()
+
+	if cachedActionID != "act_cached_1" {
+		t.Fatalf("expected ring buffer element to have cached ActionID act_cached_1, got %q", cachedActionID)
+	}
+
+	// Second query: should read cached ActionID directly
+	events2 := rec.QueryEvents(EventFilter{actionID: "act_cached_1"})
+	if len(events2) != 1 || events2[0].ActionID != "act_cached_1" {
+		t.Fatalf("expected second query to find event by cached ActionID, got %+v", events2)
+	}
+}

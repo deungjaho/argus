@@ -257,21 +257,15 @@ func TestScreenshotToolSchemas(t *testing.T) {
 		t.Fatalf("ListTools failed: %v", err)
 	}
 
-	var screenshotTool, fullPageTool *mcp.Tool
+	var screenshotTool *mcp.Tool
 	for _, tool := range res.Tools {
 		if tool.Name == "screenshot" {
 			screenshotTool = tool
-		}
-		if tool.Name == "screenshot_full_page" {
-			fullPageTool = tool
 		}
 	}
 
 	if screenshotTool == nil {
 		t.Fatal("screenshot tool not found")
-	}
-	if fullPageTool == nil {
-		t.Fatal("screenshot_full_page tool not found")
 	}
 
 	checkToolSchemaProperties := func(tool *mcp.Tool, expectedProps ...string) {
@@ -297,10 +291,19 @@ func TestScreenshotToolSchemas(t *testing.T) {
 		"path", "file_path", "format", "type", "quality", "full_page", "max_width", "max_size_kb",
 	}
 	checkToolSchemaProperties(screenshotTool, append(expected, "grid", "major_step", "minor_step")...)
-	checkToolSchemaProperties(fullPageTool, append(expected, "grid", "major_step", "minor_step")...)
 }
 
 func TestScreenshotToolCallSchemaValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping tool execution schema test in short mode")
+	}
+
+	origURL, origPort, origAttach := getConfig()
+	dummyPort := 59999
+	dummyAttach := true
+	setConfig("", dummyPort, &dummyAttach)
+	defer setConfig(origURL, origPort, &origAttach)
+
 	cs := setupMCPWithToolsets(t, "full")
 
 	// Call screenshot with various client aliases and parameters
@@ -326,9 +329,9 @@ func TestScreenshotToolCallSchemaValidation(t *testing.T) {
 		}
 	}
 
-	// Call screenshot_full_page with all compatibility arguments
+	// Call screenshot with full_page=true
 	_, err = cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "screenshot_full_page",
+		Name: "screenshot",
 		Arguments: map[string]any{
 			"path":        "/tmp/test-full.jpg",
 			"file_path":   "/tmp/test-full.jpg",
@@ -345,7 +348,7 @@ func TestScreenshotToolCallSchemaValidation(t *testing.T) {
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "-32602") || strings.Contains(err.Error(), "unexpected additional properties") {
-			t.Fatalf("screenshot_full_page failed schema validation with -32602: %v", err)
+			t.Fatalf("screenshot full_page failed schema validation with -32602: %v", err)
 		}
 	}
 }

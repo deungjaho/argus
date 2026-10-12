@@ -4,11 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,17 +23,6 @@ type networkRequestsInput struct {
 	Target                   string `json:"target,omitempty"`
 	TabID                    string `json:"tab_id,omitempty"`
 	IncludeNavigationContext bool   `json:"include_navigation_context,omitempty"`
-}
-
-type networkRequestInput struct {
-	URL       string            `json:"url,omitempty"`
-	Href      string            `json:"href,omitempty"`
-	Target    string            `json:"target,omitempty"`
-	Method    string            `json:"method,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Body      string            `json:"body,omitempty"`
-	TimeoutMs int               `json:"timeout_ms,omitempty"`
-	Timeout   int               `json:"timeout,omitempty"`
 }
 
 type consoleMessagesInput struct {
@@ -121,32 +106,6 @@ func registerNetworkTools(server *mcp.Server) {
 	})
 
 	addTool(server, &mcp.Tool{
-		Name:        "network_request",
-		Description: "Make an HTTP request from the MCP server (not from the browser). Useful for testing API endpoints directly. Returns status, headers, and body.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input networkRequestInput) (*mcp.CallToolResult, any, error) {
-		rec := BeginAction("network_request")
-		defer rec.End()
-
-		url := resolveURL(input.URL, input.Href, input.Target)
-		if url != "" {
-			input.URL = normalizeURL(url)
-		}
-		input.TimeoutMs = resolveTimeout(input.TimeoutMs, input.Timeout)
-		rec.SetParams(input)
-
-		result, err := makeHTTPRequest(input)
-		if result == nil {
-			result = map[string]any{}
-		}
-		result["action_id"] = string(rec.ID)
-		if err != nil {
-			rec.SetErrorFromError(err)
-		}
-		rec.SetResult(result)
-		return nil, result, err
-	})
-
-	addTool(server, &mcp.Tool{
 		Name:        "console_messages",
 		Description: "Capture console messages for a short duration (default 3s). Returns console.log/warn/error and uncaught exceptions. Set all=true to include all log levels (default only shows warnings, errors, and exceptions).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input consoleMessagesInput) (*mcp.CallToolResult, any, error) {
@@ -178,6 +137,7 @@ func registerNetworkTools(server *mcp.Server) {
 }
 
 func collectNetworkRequests(ctx context.Context, pageWSURL string, duration time.Duration) (result []map[string]any, err error) {
+	assertNotPort9224(pageWSURL)
 	defer func() {
 		if r := recover(); r != nil {
 			logWarn("collectNetworkRequests panic: %v", r)
@@ -344,67 +304,6 @@ func fetchResponseBody(conn *websocket.Conn, requestID string) (string, error) {
 		}
 		// Skip other events/responses
 	}
-}
-
-func makeHTTPRequest(input networkRequestInput) (map[string]any, error) {
-	method := strings.TrimSpace(input.Method)
-	if method == "" {
-		method = "GET"
-	}
-	// SSRF protection: only allow http and https schemes.
-	// Reject file://, data:, gopher:, etc. that could read local files
-	// or access internal services unexpectedly.
-	parsedURL, err := url.Parse(input.URL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-	scheme := strings.ToLower(parsedURL.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", scheme)
-	}
-	timeout := time.Duration(input.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	client := &http.Client{Timeout: timeout}
-	var bodyReader io.Reader = nil
-	if input.Body != "" {
-		bodyReader = strings.NewReader(input.Body)
-	}
-	req, err := http.NewRequest(method, input.URL, bodyReader)
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range input.Headers {
-		req.Header.Set(key, value)
-	}
-	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return map[string]any{"error": err.Error(), "url": input.URL, "method": method}, nil
-	}
-	defer resp.Body.Close()
-	elapsed := time.Since(start)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return map[string]any{
-		"url":         input.URL,
-		"method":      method,
-		"status":      resp.StatusCode,
-		"status_text": resp.Status,
-		"headers":     flattenHeaders(resp.Header),
-		"body":        truncateRunes(string(body), 2000),
-		"elapsed_ms":  elapsed.Milliseconds(),
-	}, nil
-}
-
-func flattenHeaders(header map[string][]string) map[string]string {
-	flat := map[string]string{}
-	for key, values := range header {
-		if len(values) > 0 {
-			flat[key] = values[0]
-		}
-	}
-	return flat
 }
 
 // queryNetworkFromRecorder queries the flight recorder for network events

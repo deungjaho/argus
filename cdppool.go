@@ -72,6 +72,8 @@ func getConn(wsURL string) (*cdpConn, error) {
 	}
 	pool[wsURL] = conn
 	poolMu.Unlock()
+	// Page endpoints rearm intercept state. Callers of getConn (or cdpRequest)
+	// MUST NOT hold state.mu, as rearmInterceptState acquires state.mu.Lock().
 	if isPageEndpoint(wsURL) {
 		rearmInterceptState(conn, wsURL)
 	}
@@ -79,6 +81,7 @@ func getConn(wsURL string) (*cdpConn, error) {
 }
 
 func dialConn(wsURL string) (*cdpConn, error) {
+	assertNotPort9224(wsURL)
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, err
@@ -114,6 +117,7 @@ func dialConn(wsURL string) (*cdpConn, error) {
 			conn.epoch = rec.BeginEpoch(targetID)
 		}
 		startRecorderSubscriber(conn, wsURL)
+		startDialogSubscriber(conn, wsURL)
 	}
 	return conn, nil
 }
@@ -179,14 +183,19 @@ func (c *cdpConn) readLoop() {
 		}
 		c.close()
 		// Remove from pool if still present
+		var droppedURL string
 		poolMu.Lock()
 		for url, conn := range pool {
 			if conn == c {
+				droppedURL = url
 				delete(pool, url)
 				break
 			}
 		}
 		poolMu.Unlock()
+		if droppedURL != "" && isPageEndpoint(droppedURL) {
+			removeInterceptState(droppedURL)
+		}
 		c.log.Debug("readLoop exited")
 	}()
 

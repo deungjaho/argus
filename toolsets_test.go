@@ -29,9 +29,9 @@ func TestToolEnabledCoreOnly(t *testing.T) {
 	enabledTools = parseToolsets("core")
 
 	// click/navigate/snapshot are CapDefault, not CapCore.
-	// CapCore tools like new_tab, scroll, type should be enabled.
-	if !toolEnabled("new_tab") {
-		t.Error("new_tab should be enabled in core toolset")
+	// CapCore tools like tab, scroll, type should be enabled.
+	if !toolEnabled("tab") {
+		t.Error("tab should be enabled in core toolset")
 	}
 	if !toolEnabled("scroll") {
 		t.Error("scroll should be enabled in core toolset")
@@ -42,11 +42,8 @@ func TestToolEnabledCoreOnly(t *testing.T) {
 	if toolEnabled("network_requests") {
 		t.Error("network_requests should NOT be enabled in core-only toolset")
 	}
-	if toolEnabled("intercept") {
-		t.Error("intercept should NOT be enabled in core-only toolset")
-	}
-	if toolEnabled("pdf") {
-		t.Error("pdf should NOT be enabled in core-only toolset")
+	if toolEnabled("diagnose") {
+		t.Error("diagnose should NOT be enabled in core-only toolset")
 	}
 }
 
@@ -67,8 +64,8 @@ func TestToolEnabledDefaultOnly(t *testing.T) {
 	if toolEnabled("network_requests") {
 		t.Error("network_requests should NOT be enabled in default-only toolset")
 	}
-	if toolEnabled("new_tab") {
-		t.Error("new_tab should NOT be enabled in default-only toolset")
+	if toolEnabled("tab") {
+		t.Error("tab should NOT be enabled in default-only toolset")
 	}
 	if toolEnabled("scroll") {
 		t.Error("scroll should NOT be enabled in default-only toolset")
@@ -80,14 +77,14 @@ func TestToolEnabledCoreDiagnose(t *testing.T) {
 	defer func() { enabledTools = orig }()
 	enabledTools = parseToolsets("core,diagnose")
 
-	if !toolEnabled("new_tab") {
-		t.Error("new_tab should be enabled in core,diagnose")
+	if !toolEnabled("tab") {
+		t.Error("tab should be enabled in core,diagnose")
 	}
 	if !toolEnabled("network_requests") {
 		t.Error("network_requests should be enabled in core,diagnose")
 	}
-	if !toolEnabled("intercept") {
-		t.Error("intercept should be enabled in core,diagnose")
+	if !toolEnabled("diagnose") {
+		t.Error("diagnose should be enabled in core,diagnose")
 	}
 	// The default loop is always on: core,diagnose must still expose
 	// eval/click/navigate or the agent has no usable interaction surface.

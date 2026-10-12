@@ -2,10 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -254,8 +251,29 @@ func registerTraceTools(server *mcp.Server) {
 		result["network_issue_count"] = len(networkIssues)
 		result["network_requests"] = networkIssues // alias for convenience
 
+		// 5b. Dev server error overlay detection (Feature F11 / Issue #7)
+		var devOverlay *DevOverlayError
+		if ws, wsErr := requireTargetWS(); wsErr == nil && ws != "" {
+			if o, oErr := checkDevOverlay(ws); oErr == nil && o != nil && o.Detected {
+				devOverlay = o
+				result["dev_overlay"] = o
+			}
+		}
+
 		// 6. Unified errors list (exceptions + console errors)
-		errorsList := make([]map[string]any, 0, len(exceptions)+len(consoleIssues))
+		errorsList := make([]map[string]any, 0, len(exceptions)+len(consoleIssues)+1)
+		if devOverlay != nil {
+			errorsList = append(errorsList, map[string]any{
+				"type":      "dev_overlay",
+				"framework": devOverlay.Framework,
+				"title":     devOverlay.Title,
+				"message":   devOverlay.Message,
+				"file":      devOverlay.File,
+				"line":      devOverlay.Line,
+				"column":    devOverlay.Column,
+				"stack":     devOverlay.Stack,
+			})
+		}
 		for _, e := range exceptions {
 			errorsList = append(errorsList, map[string]any{
 				"type":      "exception",
@@ -290,126 +308,17 @@ func registerTraceTools(server *mcp.Server) {
 
 		// 8. Summary
 		issueCount := len(consoleIssues) + len(exceptions) + len(failedActions) + len(networkIssues)
-		if issueCount == 0 {
+		if issueCount == 0 && devOverlay == nil {
 			result["summary"] = "no issues found in recent history"
 		} else {
 			result["summary"] = formatDiagnoseSummary(len(consoleIssues), len(exceptions), len(failedActions), len(networkIssues))
 		}
+		if devOverlay != nil {
+			result["summary"] = fmt.Sprintf("Dev server error overlay detected (%s): %s; %s",
+				devOverlay.Framework, devOverlay.Message, result["summary"])
+		}
 
 		return nil, result, nil
-	})
-
-	type exportTraceInput struct {
-		Path     string `json:"path,omitempty"`
-		FilePath string `json:"file_path,omitempty"`
-		File     string `json:"file,omitempty"`
-		Filename string `json:"filename,omitempty"`
-		Output   string `json:"output,omitempty"`
-		ActionID string `json:"action_id,omitempty"`
-		TargetID string `json:"target_id,omitempty"`
-		Target   string `json:"target,omitempty"`
-		TabID    string `json:"tab_id,omitempty"`
-	}
-
-	addTool(server, &mcp.Tool{
-		Name: "export_trace",
-		Description: "Export a trace bundle (JSON) containing recent actions, events, and page status " +
-			"from the flight recorder. Useful for saving evidence of a debugging session or " +
-			"sharing with another agent. Files are written to a controlled artifact directory " +
-			"(~/.local/share/argus/traces/ or ARGUS_TRACE_DIR) with mode 0600. " +
-			"Existing files are not overwritten (use a different filename). " +
-			"Filter by action_id or target_id to export a specific subset.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input exportTraceInput) (*mcp.CallToolResult, any, error) {
-		actionID := strings.TrimSpace(input.ActionID)
-		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
-
-		// Gather all data
-		trace := map[string]any{
-			"exported_at": time.Now().Format(time.RFC3339),
-			"version":     argusVersion,
-		}
-
-		// Actions — redact params/result for full security
-		actFilter := ActionFilter{targetID: targetID, limit: 200}
-		actions := rec.QueryActions(actFilter)
-		if actionID != "" {
-			filtered := []ActionRecord{}
-			for _, a := range actions {
-				if string(a.ID) == actionID {
-					filtered = append(filtered, a)
-				}
-			}
-			actions = filtered
-		}
-		// Redact sensitive data in action params and results
-		redactedActions := make([]ActionRecord, len(actions))
-		for i, a := range actions {
-			a.Params = redactData(a.Params)
-			a.Result = redactData(a.Result)
-			redactedActions[i] = a
-		}
-		trace["actions"] = redactedActions
-
-		// Events — redact sensitive data
-		evtFilter := EventFilter{
-			actionID: actionID,
-			targetID: targetID,
-			limit:    2000,
-		}
-		events := rec.QueryEvents(evtFilter)
-		redactedEvents := make([]EventRecord, len(events))
-		for i, e := range events {
-			e.Data = redactData(e.Data)
-			redactedEvents[i] = e
-		}
-		trace["events"] = redactedEvents
-
-		// Status — redact sensitive data
-		status, _ := browserStatus()
-		if status != nil {
-			trace["status"] = redactData(status)
-		}
-
-		// Recorder stats
-		trace["recorder"] = rec.Stats()
-
-		// Resolve output path in controlled artifact directory
-		traceDir := getTraceDir()
-		if err := os.MkdirAll(traceDir, 0700); err != nil {
-			return nil, nil, fmt.Errorf("failed to create trace directory %s: %w", traceDir, err)
-		}
-
-		filename := resolveInputPath(input.Path, input.FilePath, input.File, input.Filename, input.Output)
-		if filename == "" {
-			filename = fmt.Sprintf("argus-trace-%d.json", time.Now().UnixNano())
-		}
-		// If the path contains a separator, take only the base name
-		// to prevent path traversal outside the trace directory.
-		filename = filepath.Base(filename)
-		if filename == "" || filename == "." || filename == ".." {
-			filename = fmt.Sprintf("argus-trace-%d.json", time.Now().UnixNano())
-		}
-		path := filepath.Join(traceDir, filename)
-
-		// Refuse to overwrite existing files
-		if _, err := os.Stat(path); err == nil {
-			return nil, nil, fmt.Errorf("trace file already exists: %s (use a different filename)", path)
-		}
-
-		data, err := json.MarshalIndent(trace, "", "  ")
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to marshal trace: %w", err)
-		}
-		if err := os.WriteFile(path, data, 0600); err != nil {
-			return nil, nil, fmt.Errorf("failed to write trace file: %w", err)
-		}
-
-		return nil, map[string]any{
-			"path":         path,
-			"bytes":        len(data),
-			"action_count": len(actions),
-			"event_count":  len(events),
-		}, nil
 	})
 }
 
@@ -640,19 +549,6 @@ func formatInt(n int) string {
 		n /= 10
 	}
 	return string(digits)
-}
-
-// getTraceDir returns the controlled directory for trace exports.
-// Priority: ARGUS_TRACE_DIR env > ~/.local/share/argus/traces/
-func getTraceDir() string {
-	if dir := os.Getenv("ARGUS_TRACE_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return filepath.Join(os.TempDir(), "argus-traces")
-	}
-	return filepath.Join(home, ".local", "share", "argus", "traces")
 }
 
 func parseTimelineTime(s string) time.Time {
