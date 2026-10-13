@@ -18,8 +18,8 @@ var expectedCanonicalRegistry = []string{
 	"configure", "status",
 	// Navigation (1)
 	"navigate",
-	// Perception & Query (7)
-	"look", "snapshot", "a11y_snapshot", "get_element", "screenshot", "query", "get_picked",
+	// Perception & Query (8)
+	"look", "snapshot", "a11y_snapshot", "get_element", "screenshot", "query", "get_picked", "record",
 	// Interaction & Action (8)
 	"click", "type", "fill", "scroll", "hover", "drag", "batch_actions", "upload_file",
 	// Synchronization & Dialog (2)
@@ -43,8 +43,8 @@ var deletedToolsBlacklistC2 = []string{
 
 // 1. ToolMetaRegistry Count and Invariants
 func TestEmpirical_C2_ToolMetaRegistry_26CanonicalTools(t *testing.T) {
-	if len(toolMetaRegistry) != 29 {
-		t.Fatalf("toolMetaRegistry length = %d, want exactly 29", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 30 {
+		t.Fatalf("toolMetaRegistry length = %d, want exactly 30", len(toolMetaRegistry))
 	}
 
 	seen := make(map[string]int)
@@ -143,13 +143,13 @@ func TestEmpirical_C2_ParseToolsets_Matrix(t *testing.T) {
 	}{
 		{
 			input:         "",
-			expectedCount: 29,
+			expectedCount: 30,
 			mustInclude:   []string{"configure", "status", "click", "tab", "storage", "diagnose", "timeline", "mock_route"},
 			mustExclude:   nil,
 		},
 		{
 			input:         "full",
-			expectedCount: 29,
+			expectedCount: 30,
 			mustInclude:   []string{"configure", "status", "click", "tab", "storage", "diagnose", "timeline", "mock_route"},
 			mustExclude:   nil,
 		},
@@ -173,19 +173,19 @@ func TestEmpirical_C2_ParseToolsets_Matrix(t *testing.T) {
 		},
 		{
 			input:         "core",
-			expectedCount: 24,
+			expectedCount: 25,
 			mustInclude:   []string{"configure", "click", "tab", "storage", "type", "scroll", "hover", "drag", "batch_actions", "upload_file", "handle_dialog", "emulate"},
 			mustExclude:   []string{"network_requests", "console_messages", "diagnose", "timeline", "mock_route"},
 		},
 		{
 			input:         "core,diagnose",
-			expectedCount: 29,
+			expectedCount: 30,
 			mustInclude:   []string{"configure", "click", "tab", "diagnose", "mock_route"},
 			mustExclude:   nil,
 		},
 		{
 			input:         "  core  ,   diagnose  ",
-			expectedCount: 29,
+			expectedCount: 30,
 			mustInclude:   []string{"configure", "click", "tab", "diagnose", "mock_route"},
 			mustExclude:   nil,
 		},
@@ -233,8 +233,8 @@ func TestEmpirical_C2_SchemaTokenEconomy(t *testing.T) {
 	}{
 		{"default", 14, 2500},
 		{"default,diagnose", 18, 3800},
-		{"core", 24, 4600},
-		{"full", 29, 6500},
+		{"core", 25, 4800},
+		{"full", 30, 6700},
 	}
 
 	for _, p := range profiles {
@@ -260,8 +260,8 @@ func TestEmpirical_C2_SchemaTokenEconomy(t *testing.T) {
 	_, fullBytes := measureToolset(t, "full")
 	fullSavings := float64(legacyFullBytes-fullBytes) / float64(legacyFullBytes) * 100.0
 	t.Logf("Full canonical 27 savings vs legacy full 48-tools: %.1f%%", fullSavings)
-	if fullSavings < 25.0 {
-		t.Errorf("full savings %.1f%% < 25%%", fullSavings)
+	if fullSavings < 23.0 {
+		t.Errorf("full savings %.1f%% < 23%%", fullSavings)
 	}
 }
 

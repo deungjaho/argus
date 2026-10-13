@@ -147,8 +147,9 @@ func ensurePickerInjected(ws, targetID string) {
 	}
 	pickerDone[targetID] = true
 	pickerMu.Unlock()
-	_ = cdpRequest(ws, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": pickerScript}, nil)
-	_, _ = cdpEvaluate(ws, pickerScript, true)
+	bundle := pickerScript + "\n" + recorderScript
+	_ = cdpRequest(ws, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": bundle}, nil)
+	_, _ = cdpEvaluate(ws, bundle, true)
 }
 
 // pickedRef reports whether a selector string refers to the latest pick.

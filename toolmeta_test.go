@@ -5,8 +5,8 @@ import (
 )
 
 func TestToolMetaRegistryCount(t *testing.T) {
-	if len(toolMetaRegistry) != 29 {
-		t.Errorf("toolMetaRegistry has %d entries, expected 29", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 30 {
+		t.Errorf("toolMetaRegistry has %d entries, expected 30", len(toolMetaRegistry))
 	}
 	foundMockRoute := false
 	for _, m := range toolMetaRegistry {
