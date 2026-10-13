@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -648,7 +649,13 @@ func registerInteractionTools(server *mcp.Server) {
 				"results":     stepResults,
 			}
 			settleAndCaptureVerification(rec, ws, res)
-			return nil, res, fmt.Errorf("step %d (%s) failed: %w", i+1, actionType, err)
+			// The MCP layer discards `res` when err != nil, so embed the
+			// structured step results in the error text to keep them visible.
+			payload, _ := json.Marshal(res)
+			if t, ok := stepRes["target"]; ok {
+				return nil, res, fmt.Errorf("step %d/%d (%s %v) failed: %w\nbatch result: %s", i+1, len(input.Actions), actionType, t, err, payload)
+			}
+			return nil, res, fmt.Errorf("step %d/%d (%s) failed: %w\nbatch result: %s", i+1, len(input.Actions), actionType, err, payload)
 		}
 
 		varRef := regexp.MustCompile(`\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}`)
@@ -865,6 +872,9 @@ func registerInteractionTools(server *mcp.Server) {
 			actionType := strings.ToLower(strings.TrimSpace(step.Action))
 			target := expandVars(resolveSelector(step.Ref, step.Selector, step.CSS, step.Target, step.XPath, ""))
 			stepRes := map[string]any{"index": i + 1, "action": actionType}
+			if target != "" {
+				stepRes["target"] = target
+			}
 
 			if err := runStep(step, actionType, target, stepRes); err != nil {
 				if step.Optional {

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -203,6 +204,18 @@ func cdpVersion() (browserCDPVersionInfo, error) {
 }
 
 func cdpTargets() ([]browserTarget, error) {
+	targets, err := listCDPTargets()
+	_, _, isAttach := getConfig()
+	if err != nil && isAttach {
+		// Attach mode: the configured browser may simply not be running.
+		// Try to launch Chrome Argus once and give it a moment to come up.
+		tryAutostartBrowser()
+		targets, err = listCDPTargets()
+	}
+	return targets, err
+}
+
+func listCDPTargets() ([]browserTarget, error) {
 	resp, err := cdpHTTPClient.Get(cdpBaseURL() + "/json/list")
 	if err != nil {
 		return nil, err
@@ -216,6 +229,29 @@ func cdpTargets() ([]browserTarget, error) {
 		return nil, err
 	}
 	return targets, nil
+}
+
+var autostartBrowserOnce sync.Once
+
+// tryAutostartBrowser launches Chrome when the attach endpoint is dead,
+// then polls the CDP target list until it responds or ~8s elapse.
+func tryAutostartBrowser() {
+	autostartBrowserOnce.Do(func() {
+		logInfo("attach target unreachable on :%d — attempting to launch Chrome", cdpPort)
+		if err := launchChrome(); err != nil {
+			logWarn("autostart launch failed: %v", err)
+			return
+		}
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := listCDPTargets(); err == nil {
+				logInfo("autostart: CDP endpoint up on :%d", cdpPort)
+				return
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+		logWarn("autostart: CDP endpoint still unreachable after 8s")
+	})
 }
 
 func cdpTargetForURL(targetURL string) (*browserTarget, error) {

@@ -102,8 +102,18 @@ func browserStatus() (map[string]any, error) {
 		target = findTargetByURL(targets, url)
 	}
 	status["tab_found"] = target != nil
+	pageTabs := 0
+	for i := range targets {
+		if targets[i].Type == "page" && strings.TrimSpace(targets[i].ParentID) == "" {
+			pageTabs++
+		}
+	}
+	status["tabs"] = pageTabs
 	if target == nil {
 		return status, nil
+	}
+	if d := dialogMgr.GetPendingDialog(target.ID); d != nil {
+		status["pending_dialog"] = map[string]any{"type": d.Type, "message": d.Message}
 	}
 	status["tab"] = map[string]any{"id": target.ID, "url": target.URL, "title": target.Title}
 	page, err := cdpEvaluate(target.WebSocketDebuggerURL, `(() => ({

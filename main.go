@@ -180,6 +180,7 @@ func main() {
 	}()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "argus", Version: argusVersion}, nil)
+	server.AddReceivingMiddleware(toolSuggestMiddleware)
 	registerAllTools(server)
 
 	// Start background health checker for Chrome
