@@ -19,6 +19,7 @@ type tabInput struct {
 	Target     string `json:"target,omitempty"`     // alias for url or tab_id
 	Title      string `json:"title,omitempty"`      // select target title substring
 	Background bool   `json:"background,omitempty"` // new tab background flag
+	Tag        string `json:"tag,omitempty"`        // new: optional label shown in tab lists/registry
 }
 
 // Backward-compatibility aliases for param tests and legacy call signatures
@@ -45,16 +46,23 @@ func registerTabTools(server *mcp.Server) {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
+			holders := tabHolders()
+			me := "agent:" + sessionOwner()
 			pages := []map[string]any{}
 			for _, t := range targets {
 				if t.Type != "page" || strings.TrimSpace(t.ParentID) != "" {
 					continue
 				}
-				pages = append(pages, map[string]any{
+				p := map[string]any{
 					"id":    t.ID,
 					"url":   t.URL,
 					"title": t.Title,
-				})
+				}
+				for k, v := range holderOf(holders, t.ID) {
+					p[k] = v
+				}
+				p["mine"] = p["holder"] == me
+				pages = append(pages, p)
 			}
 			res := map[string]any{"tabs": pages, "count": len(pages), "action_id": string(rec.ID)}
 			rec.SetResult(res)
@@ -76,6 +84,9 @@ func registerTabTools(server *mcp.Server) {
 			if err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
+			}
+			if input.Tag != "" {
+				beaconRegisterTab(tabID, url, input.Tag)
 			}
 			setConfig(url, 0, nil)
 			if !input.Background {

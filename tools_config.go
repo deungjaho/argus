@@ -116,6 +116,9 @@ func browserStatus() (map[string]any, error) {
 		status["pending_dialog"] = map[string]any{"type": d.Type, "message": d.Message}
 	}
 	status["tab"] = map[string]any{"id": target.ID, "url": target.URL, "title": target.Title}
+	if ext := externalEvents(cdpLedgerRead(target.WebSocketDebuggerURL), 60000); len(ext) > 0 {
+		status["recent_external_input"] = ext
+	}
 	page, err := cdpEvaluate(target.WebSocketDebuggerURL, `(() => ({
 url: location.href,
 title: document.title,
