@@ -260,6 +260,16 @@ sequenceDiagram
     D-->>U: 响应（agent 只见稳定 URL）
 ```
 
+## 8.8 里程碑排序（2026-10-13 第三轮决议）
+
+**M0 先行：可用性实证 + 弃用点埋点**（在一切新特性之前）
+
+- **#10 实证评估**：真实 agent 跑固定任务集（登录→点元素→填表→断言），量化任务完成率 / turns-to-success / 弃用点分布——回答"argus 现在是否处于能用状态"
+- **弃用点埋点**：telemetry 记录每个 tool call 的 `{outcome, error_class, retry_of}`，并标记"最后一次 argus 调用 → 转投 raw CDP/其他"的切换点——弃用前最后的调用序列就是下一个要修的东西
+- 候选修复项（按实测分布排序再上）：a11y ref 失配自动重解析一次、廉价"现状"工具（url/readyState/dialog/tab_count 一次拿全）
+
+之后按既定依赖链推进：`beacon#1 registry → argus#11 producer → beacon#2 tabs/jump → argus#15 picker → argus#16 record`；支线独立：`#17 devproxy`、`#18 Chrome Argus 重建`、`#12 attached 隐藏窗`、`#13 isolated`。
+
 ## 9. 待决问题
 
 - [ ] `attached` session 的"隐藏"手段选型：屏幕外坐标 / 独立 Space / 最小化（需验证各手段下 `visibilityState` 与截图行为）
