@@ -120,6 +120,7 @@ func requireTargetWS(targetID ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ensurePickerInjected(target.WebSocketDebuggerURL, target.ID)
 	return target.WebSocketDebuggerURL, nil
 }
 

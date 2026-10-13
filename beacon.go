@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -53,6 +54,14 @@ func beaconUnregisterTab(tabID string) {
 		return
 	}
 	beaconCall("unregister", "tab", tabID)
+}
+
+// beaconRegisterPick records a picker capture so beacon can route the
+// "user picked element" event to the owning pane later.
+func beaconRegisterPick(selector, page string) {
+	meta, _ := json.Marshal(map[string]string{"selector": selector, "url": page})
+	id := fmt.Sprintf("pick-%d", time.Now().UnixMilli())
+	beaconCall("register", "pick", id, "--pane", sessionPaneVal, "--producer", "argus", "--data", string(meta))
 }
 
 // beaconStaleTabs returns registry tab records whose owner pane is dead.

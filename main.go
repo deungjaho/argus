@@ -76,6 +76,25 @@ func main() {
 		}
 		return
 	}
+	// `argus last-pick` — print the latest picker capture from the current
+	// or configured target tab, for shell-side inspection.
+	if fs.NArg() >= 1 && fs.Arg(0) == "last-pick" {
+		attach = attach || os.Getenv("ARGUS_ATTACH") == "true" || os.Getenv("ARGUS_ATTACH") == "1"
+		setConfig(firstNonEmpty(url, os.Getenv("ARGUS_URL")), port, &attach)
+		ws, err := requireTargetWS()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "last-pick:", err)
+			os.Exit(1)
+		}
+		val, err := cdpEvaluate(ws, `(() => { return window.__argusLastPick || null; })()`, true)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "last-pick:", err)
+			os.Exit(1)
+		}
+		out, _ := json.MarshalIndent(val, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
 
 	if debug {
 		logLevel = LogDebug

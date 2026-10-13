@@ -18,8 +18,8 @@ var expectedCanonicalRegistry = []string{
 	"configure", "status",
 	// Navigation (1)
 	"navigate",
-	// Perception & Query (6)
-	"look", "snapshot", "a11y_snapshot", "get_element", "screenshot", "query",
+	// Perception & Query (7)
+	"look", "snapshot", "a11y_snapshot", "get_element", "screenshot", "query", "get_picked",
 	// Interaction & Action (8)
 	"click", "type", "fill", "scroll", "hover", "drag", "batch_actions", "upload_file",
 	// Synchronization & Dialog (2)
@@ -43,8 +43,8 @@ var deletedToolsBlacklistC2 = []string{
 
 // 1. ToolMetaRegistry Count and Invariants
 func TestEmpirical_C2_ToolMetaRegistry_26CanonicalTools(t *testing.T) {
-	if len(toolMetaRegistry) != 28 {
-		t.Fatalf("toolMetaRegistry length = %d, want exactly 28", len(toolMetaRegistry))
+	if len(toolMetaRegistry) != 29 {
+		t.Fatalf("toolMetaRegistry length = %d, want exactly 29", len(toolMetaRegistry))
 	}
 
 	seen := make(map[string]int)
@@ -143,13 +143,13 @@ func TestEmpirical_C2_ParseToolsets_Matrix(t *testing.T) {
 	}{
 		{
 			input:         "",
-			expectedCount: 28,
+			expectedCount: 29,
 			mustInclude:   []string{"configure", "status", "click", "tab", "storage", "diagnose", "timeline", "mock_route"},
 			mustExclude:   nil,
 		},
 		{
 			input:         "full",
-			expectedCount: 28,
+			expectedCount: 29,
 			mustInclude:   []string{"configure", "status", "click", "tab", "storage", "diagnose", "timeline", "mock_route"},
 			mustExclude:   nil,
 		},
@@ -173,19 +173,19 @@ func TestEmpirical_C2_ParseToolsets_Matrix(t *testing.T) {
 		},
 		{
 			input:         "core",
-			expectedCount: 23,
+			expectedCount: 24,
 			mustInclude:   []string{"configure", "click", "tab", "storage", "type", "scroll", "hover", "drag", "batch_actions", "upload_file", "handle_dialog", "emulate"},
 			mustExclude:   []string{"network_requests", "console_messages", "diagnose", "timeline", "mock_route"},
 		},
 		{
 			input:         "core,diagnose",
-			expectedCount: 28,
+			expectedCount: 29,
 			mustInclude:   []string{"configure", "click", "tab", "diagnose", "mock_route"},
 			mustExclude:   nil,
 		},
 		{
 			input:         "  core  ,   diagnose  ",
-			expectedCount: 28,
+			expectedCount: 29,
 			mustInclude:   []string{"configure", "click", "tab", "diagnose", "mock_route"},
 			mustExclude:   nil,
 		},
@@ -232,9 +232,9 @@ func TestEmpirical_C2_SchemaTokenEconomy(t *testing.T) {
 		maxEstTokens int
 	}{
 		{"default", 14, 2500},
-		{"default,diagnose", 18, 3700},
-		{"core", 23, 4500},
-		{"full", 28, 6000},
+		{"default,diagnose", 18, 3800},
+		{"core", 24, 4600},
+		{"full", 29, 6500},
 	}
 
 	for _, p := range profiles {

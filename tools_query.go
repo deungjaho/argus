@@ -9,10 +9,10 @@ import (
 )
 
 type queryInput struct {
-	Selector string   `json:"selector" jsonschema:"CSS selector. Use 'host >>> inner' segments to explicitly pierce shadow DOM; plain selectors auto-fall back to a shadow-piercing search when light DOM misses."`
-	Fields   []string `json:"fields,omitempty" jsonschema:"Fields per match: text, box, classes, attrs, html, value. Default: [text, box]."`
-	Limit    int      `json:"limit,omitempty" jsonschema:"Max results returned (default 20, max 200)."`
-	Scope    string   `json:"scope,omitempty" jsonschema:"all (default) or visible — restrict to elements visible in viewport."`
+	Selector string   `json:"selector" jsonschema:"CSS selector; 'host >>> inner' pierces shadow DOM (plain selectors auto-pierce on miss)"`
+	Fields   []string `json:"fields,omitempty" jsonschema:"Per-match fields: text, box, classes, attrs, html, value (default: text, box)"`
+	Limit    int      `json:"limit,omitempty" jsonschema:"Max results (default 20, max 200)"`
+	Scope    string   `json:"scope,omitempty" jsonschema:"all (default) or visible"`
 	Target   string   `json:"target,omitempty"`
 	TargetID string   `json:"target_id,omitempty"`
 	TabID    string   `json:"tab_id,omitempty"`
@@ -21,7 +21,7 @@ type queryInput struct {
 func registerQueryTools(server *mcp.Server) {
 	addTool(server, &mcp.Tool{
 		Name:        "query",
-		Description: "Structured DOM query: return per-element fields (text, box, classes, attrs, html, value) for selector matches with a reusable ref. Use 'host >>> inner' to pierce shadow DOM; plain selectors auto-pierce shadow roots on light-DOM miss. Prefer this over eval for reading page structure.",
+		Description: "Structured DOM query: per-element fields (text, box, classes, attrs, html, value) with a reusable ref per match. 'host >>> inner' pierces shadow DOM; plain selectors auto-pierce on light-DOM miss. Prefer over eval for reading page structure.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input queryInput) (*mcp.CallToolResult, any, error) {
 		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
 			setCurrentTargetID(targetID)
@@ -48,6 +48,32 @@ func registerQueryTools(server *mcp.Server) {
 		visibleOnly := strings.EqualFold(input.Scope, "visible")
 		val, err := cdpEvaluate(ws, queryExpression(selector, fields, limit, visibleOnly), true)
 		return nil, val, err
+	})
+
+	addTool(server, &mcp.Tool{
+		Name:        "get_picked",
+		Description: "Latest element captured by the in-page picker (Ctrl+Shift+X arms, click captures). Verified selector plus fallbacks; act via ref:\"picked\".",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input tabScopeInput) (*mcp.CallToolResult, any, error) {
+		if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target); targetID != "" {
+			setCurrentTargetID(targetID)
+		}
+		ws, err := requireTargetWS()
+		if err != nil {
+			return nil, nil, err
+		}
+		val, err := cdpEvaluate(ws, `(() => { return window.__argusLastPick || null; })()`, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		if val == nil {
+			return nil, map[string]any{"picked": false, "hint": "no pick yet — user presses Ctrl+Shift+X in the page, then clicks an element"}, nil
+		}
+		if m, ok := val.(map[string]any); ok {
+			sel, _ := m["selector"].(string)
+			page, _ := m["page"].(string)
+			beaconRegisterPick(sel, page)
+		}
+		return nil, map[string]any{"picked": true, "locator": val, "usage": "act on it via ref:\"picked\" or the returned selector"}, nil
 	})
 }
 

@@ -56,8 +56,29 @@ const argusFind = (sel) => {
   const all = sel.indexOf('>>>') >= 0 ? argusFindAll(document, sel) : argusDeepAll(sel, 8);
   return all.length ? all[0] : null;
 };
+const argusResolvePick = () => {
+  const p = window.__argusLastPick;
+  if (!p) return null;
+  if (p.selector) { const el = argusFind(p.selector); if (el) return el; }
+  const fb = p.fallbacks || {};
+  if (fb.xpath) {
+    try {
+      const r = document.evaluate(fb.xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+      if (r.singleNodeValue) return r.singleNodeValue;
+    } catch (e) {}
+  }
+  if (fb.text) {
+    let cands;
+    try { cands = fb.scope ? document.querySelectorAll(fb.scope + ' *') : document.querySelectorAll('*'); } catch (e) { cands = []; }
+    for (const c of cands) {
+      if ((c.innerText || '').trim().startsWith(fb.text.slice(0, 30))) return c;
+    }
+  }
+  return null;
+};
 const argusResolve = (selector) => {
   if (!selector) return null;
+  if (selector === 'picked' || selector.indexOf('picked:') === 0) return argusResolvePick();
   const el = argusFind(selector);
   if (el) return el;
   if (selector.indexOf('>>>') >= 0) return null;
