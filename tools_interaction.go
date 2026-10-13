@@ -216,6 +216,7 @@ func registerInteractionTools(server *mcp.Server) {
 			result["warning"] = "tab is hidden in background; used untrusted JS events (isTrusted=false). Use configure{focus:true} or bring the tab to front for trusted input."
 		}
 		settleAndCaptureVerification(rec, ws, result)
+		attachExternalActivity(ws, result)
 		return nil, result, nil
 	})
 
@@ -250,6 +251,7 @@ func registerInteractionTools(server *mcp.Server) {
 				result["warning"] = "tab is hidden; key sent via untrusted JS events (isTrusted=false). Use configure{focus:true} for trusted input."
 			}
 			settleAndCaptureVerification(rec, ws, result)
+			attachExternalActivity(ws, result)
 			return nil, result, nil
 		}
 		text := resolveValue(input.Text, input.Value, input.Input)
@@ -298,10 +300,12 @@ func registerInteractionTools(server *mcp.Server) {
 				result["warning"] = "tab is hidden; text inserted via untrusted JS (isTrusted=false). Use configure{focus:true} for trusted input."
 			}
 			settleAndCaptureVerification(rec, ws, result)
+			attachExternalActivity(ws, result)
 			return nil, result, nil
 		}
 		result := map[string]any{"action_id": string(rec.ID), "typed": len([]rune(text)), "selector": selector, "cleared": input.Clear}
 		settleAndCaptureVerification(rec, ws, result)
+		attachExternalActivity(ws, result)
 		return nil, result, nil
 	})
 
@@ -352,6 +356,7 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 			result := map[string]any{"action_id": string(rec.ID), "results": results, "count": len(results)}
 			settleAndCaptureVerification(rec, ws, result)
+			attachExternalActivity(ws, result)
 			return nil, result, nil
 		}
 		selector := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, input.Query)
@@ -407,6 +412,7 @@ func registerInteractionTools(server *mcp.Server) {
 				}
 				result := map[string]any{"action_id": string(rec.ID), "selected": value}
 				settleAndCaptureVerification(rec, ws, result)
+				attachExternalActivity(ws, result)
 				return nil, result, nil
 			}
 			if _, err := cdpCallFunctionOn(ws, objectID, a11yFillFunction, []any{val}, true); err != nil {
@@ -422,6 +428,7 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 			result := map[string]any{"action_id": string(rec.ID), "filled": selector, "backend_dom_node_id": a11yNode.BackendDOMNodeID, "value_length": len([]rune(val))}
 			settleAndCaptureVerification(rec, ws, result)
+			attachExternalActivity(ws, result)
 			return nil, result, nil
 		}
 
@@ -444,6 +451,7 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 			result := map[string]any{"action_id": string(rec.ID), "selected": value}
 			settleAndCaptureVerification(rec, ws, result)
+			attachExternalActivity(ws, result)
 			return nil, result, nil
 		}
 		if _, _, _, err := autoWaitForElement(ctx, ws, selector, "", opts); err != nil {
@@ -463,6 +471,7 @@ func registerInteractionTools(server *mcp.Server) {
 		}
 		result := map[string]any{"action_id": string(rec.ID), "filled": selector, "value_length": len([]rune(val))}
 		settleAndCaptureVerification(rec, ws, result)
+		attachExternalActivity(ws, result)
 		return nil, result, nil
 	})
 
@@ -516,6 +525,7 @@ func registerInteractionTools(server *mcp.Server) {
 			out["warning"] = "tab is hidden; scrolled via untrusted JS scrollBy. Use configure{focus:true} for trusted wheel events."
 		}
 		settleAndCaptureVerification(rec, ws, out)
+		attachExternalActivity(ws, out)
 		return nil, out, nil
 	})
 
@@ -563,6 +573,7 @@ func registerInteractionTools(server *mcp.Server) {
 		}
 		attachEvidence(rec, ws, out)
 		rec.SetResult(out)
+		attachExternalActivity(ws, out)
 		return nil, out, nil
 	})
 
@@ -608,6 +619,7 @@ func registerInteractionTools(server *mcp.Server) {
 		out := map[string]any{"action_id": string(rec.ID), "dragged": value}
 		attachEvidence(rec, ws, out)
 		rec.SetResult(out)
+		attachExternalActivity(ws, out)
 		return nil, out, nil
 	})
 
@@ -649,6 +661,7 @@ func registerInteractionTools(server *mcp.Server) {
 				"results":     stepResults,
 			}
 			settleAndCaptureVerification(rec, ws, res)
+			attachExternalActivity(ws, res)
 			// The MCP layer discards `res` when err != nil, so embed the
 			// structured step results in the error text to keep them visible.
 			payload, _ := json.Marshal(res)
@@ -897,6 +910,7 @@ func registerInteractionTools(server *mcp.Server) {
 			result["vars"] = vars
 		}
 		settleAndCaptureVerification(rec, ws, result)
+		attachExternalActivity(ws, result)
 		return nil, result, nil
 	})
 }

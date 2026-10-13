@@ -41,12 +41,16 @@ func beaconCall(args ...string) {
 }
 
 // beaconRegisterTab records a tab owned by this pane.
-func beaconRegisterTab(tabID, url string) {
+func beaconRegisterTab(tabID, url string, tag ...string) {
 	if tabID == "" {
 		return
 	}
-	meta, _ := json.Marshal(map[string]string{"url": url})
-	beaconCall("register", "tab", tabID, "--pane", sessionPaneVal, "--producer", "argus", "--data", string(meta))
+	meta := map[string]string{"url": url}
+	if len(tag) > 0 && tag[0] != "" {
+		meta["tag"] = tag[0]
+	}
+	data, _ := json.Marshal(meta)
+	beaconCall("register", "tab", tabID, "--pane", sessionPaneVal, "--producer", "argus", "--data", string(data))
 }
 
 func beaconUnregisterTab(tabID string) {

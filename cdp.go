@@ -498,11 +498,13 @@ func pageVisibility(ws string) string {
 // the untrusted JS fallback.
 func ensureInputDelivery(ws string) string {
 	if pageVisibility(ws) == "visible" {
+		ledgerStamp(ws)
 		return deliverTrusted
 	}
 	if wantFocus() {
 		if targetID := targetIDFromWSURL(ws); targetID != "" {
 			if err := cdpActivateTarget(targetID); err == nil && pageVisibility(ws) == "visible" {
+				ledgerStamp(ws)
 				return deliverTrusted
 			}
 		}
@@ -540,6 +542,7 @@ func jsClickAt(ws string, x, y float64, button string, clickCount int) error {
 		btn = 2
 	}
 	expr := fmt.Sprintf(`(() => {
+`+ledgerStampJS()+`
 %s
 const el = argusHitPick(%v, %v);
 if (!el) throw new Error('no element at point (%v, %v)');
@@ -557,6 +560,7 @@ return el.tagName + (el.id ? '#'+el.id : '');
 
 func jsMouseMoveAt(ws string, x, y float64) error {
 	expr := fmt.Sprintf(`(() => {
+`+ledgerStampJS()+`
 %s
 const el = argusHitPick(%v, %v);
 if (!el) return null;
@@ -571,6 +575,7 @@ return true;
 
 func jsInsertText(ws, text string) error {
 	expr := fmt.Sprintf(`(() => {
+`+ledgerStampJS()+`
 if (document.execCommand('insertText', false, %s)) return true;
 const el = document.activeElement;
 if (el && 'value' in el) {
@@ -591,6 +596,7 @@ throw new Error('no editable target for insertText');
 
 func jsDispatchKey(ws, key string, modifiers int) error {
 	expr := fmt.Sprintf(`(() => {
+`+ledgerStampJS()+`
 const el = document.activeElement || document.body;
 const mods = {altKey: %t, ctrlKey: %t, metaKey: %t, shiftKey: %t};
 const key = %s;
@@ -635,7 +641,7 @@ func cdpDispatchScroll(pageWSURL string, x, y, deltaX, deltaY float64) (string, 
 	// mouseWheel goes through the real input pipeline: trusted wheel events
 	// fire scroll listeners and lazy loaders, unlike synthetic dispatchEvent.
 	if ensureInputDelivery(pageWSURL) == deliverJS {
-		expr := fmt.Sprintf(`(() => { window.scrollBy(%v, %v); return {scrollX: window.scrollX, scrollY: window.scrollY}; })()`, deltaX, deltaY)
+		expr := fmt.Sprintf(`(() => { `+ledgerStampJS()+` window.scrollBy(%v, %v); return {scrollX: window.scrollX, scrollY: window.scrollY}; })()`, deltaX, deltaY)
 		v, err := cdpEvaluate(pageWSURL, expr, true)
 		return deliverJS, v, err
 	}

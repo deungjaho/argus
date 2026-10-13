@@ -147,7 +147,7 @@ func ensurePickerInjected(ws, targetID string) {
 	}
 	pickerDone[targetID] = true
 	pickerMu.Unlock()
-	bundle := pickerScript + "\n" + recorderScript
+	bundle := pickerScript + ";\n" + recorderScript + ";\n" + ledgerScript
 	_ = cdpRequest(ws, "Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": bundle}, nil)
 	_, _ = cdpEvaluate(ws, bundle, true)
 }
