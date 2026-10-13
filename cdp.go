@@ -432,42 +432,168 @@ func cdpCaptureScreenshot(pageWSURL string, fullPage bool) ([]byte, error) {
 
 // --- CDP input dispatch ---
 
-func cdpDispatchMouseClick(pageWSURL string, x, y float64, button string, clickCount int) error {
+// Input delivery modes reported back to callers.
+const (
+	deliverTrusted = "trusted"      // real Input.dispatch* on a visible page
+	deliverJS      = "untrusted_js" // JS event fallback on a hidden page
+)
+
+// pageVisibility returns document.visibilityState ("" on error).
+func pageVisibility(ws string) string {
+	v, err := cdpEvaluateTimeout(ws, "document.visibilityState", false, 3*time.Second)
+	if err != nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// ensureInputDelivery picks the input path. Headful Chrome silently drops
+// Input.dispatch* events on background tabs (visibilityState != visible),
+// so hidden pages must either be brought to front (focus mode only) or take
+// the untrusted JS fallback.
+func ensureInputDelivery(ws string) string {
+	if pageVisibility(ws) == "visible" {
+		return deliverTrusted
+	}
+	if wantFocus() {
+		if targetID := targetIDFromWSURL(ws); targetID != "" {
+			if err := cdpActivateTarget(targetID); err == nil && pageVisibility(ws) == "visible" {
+				return deliverTrusted
+			}
+		}
+	}
+	return deliverJS
+}
+
+func jsClickAt(ws string, x, y float64, button string, clickCount int) error {
+	btn := 0
+	switch button {
+	case "middle":
+		btn = 1
+	case "right":
+		btn = 2
+	}
+	expr := fmt.Sprintf(`(() => {
+const el = document.elementFromPoint(%v, %v);
+if (!el) throw new Error('no element at point (%v, %v)');
+const Ctor = t => t.startsWith('pointer') ? PointerEvent : MouseEvent;
+for (let i = 0; i < %d; i++) {
+  for (const t of ['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click']) {
+    el.dispatchEvent(new (Ctor(t))(t, {bubbles:true, composed:true, clientX:%v, clientY:%v, button:%d}));
+  }
+}
+return el.tagName + (el.id ? '#'+el.id : '');
+})()`, x, y, x, y, clickCount, x, y, btn)
+	_, err := cdpEvaluate(ws, expr, true)
+	return err
+}
+
+func jsMouseMoveAt(ws string, x, y float64) error {
+	expr := fmt.Sprintf(`(() => {
+const el = document.elementFromPoint(%v, %v);
+if (!el) return null;
+for (const [t, E] of [['pointerover',PointerEvent],['mouseover',MouseEvent],['mouseenter',MouseEvent],['mousemove',MouseEvent]]) {
+  el.dispatchEvent(new E(t, {bubbles: t !== 'mouseenter', composed:true, clientX:%v, clientY:%v}));
+}
+return true;
+})()`, x, y, x, y)
+	_, err := cdpEvaluate(ws, expr, true)
+	return err
+}
+
+func jsInsertText(ws, text string) error {
+	expr := fmt.Sprintf(`(() => {
+if (document.execCommand('insertText', false, %s)) return true;
+const el = document.activeElement;
+if (el && 'value' in el) {
+  el.value += %s;
+  el.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, data:%s, inputType:'insertText'}));
+  return true;
+}
+if (el && el.isContentEditable) {
+  el.textContent += %s;
+  el.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, data:%s, inputType:'insertText'}));
+  return true;
+}
+throw new Error('no editable target for insertText');
+})()`, jsString(text), jsString(text), jsString(text), jsString(text), jsString(text))
+	_, err := cdpEvaluate(ws, expr, true)
+	return err
+}
+
+func jsDispatchKey(ws, key string, modifiers int) error {
+	expr := fmt.Sprintf(`(() => {
+const el = document.activeElement || document.body;
+const mods = {altKey: %t, ctrlKey: %t, metaKey: %t, shiftKey: %t};
+const key = %s;
+const opts = Object.assign({bubbles:true, cancelable:true, composed:true, key}, mods);
+el.dispatchEvent(new KeyboardEvent('keydown', opts));
+if (key.length === 1) el.dispatchEvent(new KeyboardEvent('keypress', opts));
+el.dispatchEvent(new KeyboardEvent('keyup', opts));
+if ((key === 'Enter' || key === ' ') && (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || typeof el.click === 'function')) el.click();
+return true;
+})()`, modifiers&1 != 0, modifiers&2 != 0, modifiers&4 != 0, modifiers&8 != 0, jsString(key))
+	_, err := cdpEvaluate(ws, expr, true)
+	return err
+}
+
+func cdpDispatchMouseClick(pageWSURL string, x, y float64, button string, clickCount int) (string, error) {
+	if ensureInputDelivery(pageWSURL) == deliverJS {
+		return deliverJS, jsClickAt(pageWSURL, x, y, button, clickCount)
+	}
 	params := map[string]any{"x": x, "y": y, "button": button, "clickCount": clickCount}
 	pressed := cloneMap(params)
 	pressed["type"] = "mousePressed"
 	if err := cdpRequest(pageWSURL, "Input.dispatchMouseEvent", pressed, nil); err != nil {
-		return err
+		return deliverTrusted, err
 	}
 	released := cloneMap(params)
 	released["type"] = "mouseReleased"
-	return cdpRequest(pageWSURL, "Input.dispatchMouseEvent", released, nil)
+	return deliverTrusted, cdpRequest(pageWSURL, "Input.dispatchMouseEvent", released, nil)
 }
 
-func cdpDispatchMouseHover(pageWSURL string, x, y float64) error {
+func cdpDispatchMouseHover(pageWSURL string, x, y float64) (string, error) {
+	if ensureInputDelivery(pageWSURL) == deliverJS {
+		return deliverJS, jsMouseMoveAt(pageWSURL, x, y)
+	}
 	moved := map[string]any{"type": "mouseMoved", "x": x, "y": y}
 	if err := cdpRequest(pageWSURL, "Input.dispatchMouseEvent", moved, nil); err != nil {
-		return err
+		return deliverTrusted, err
 	}
-	return nil
+	return deliverTrusted, nil
 }
 
-func cdpDispatchScroll(pageWSURL string, x, y, deltaX, deltaY float64) (any, error) {
+func cdpDispatchScroll(pageWSURL string, x, y, deltaX, deltaY float64) (string, any, error) {
 	// mouseWheel goes through the real input pipeline: trusted wheel events
 	// fire scroll listeners and lazy loaders, unlike synthetic dispatchEvent.
+	if ensureInputDelivery(pageWSURL) == deliverJS {
+		expr := fmt.Sprintf(`(() => { window.scrollBy(%v, %v); return {scrollX: window.scrollX, scrollY: window.scrollY}; })()`, deltaX, deltaY)
+		v, err := cdpEvaluate(pageWSURL, expr, true)
+		return deliverJS, v, err
+	}
 	if err := cdpRequest(pageWSURL, "Input.dispatchMouseEvent", map[string]any{
 		"type": "mouseWheel", "x": x, "y": y, "deltaX": deltaX, "deltaY": deltaY,
 	}, nil); err != nil {
-		return nil, err
+		return deliverTrusted, nil, err
 	}
-	return cdpEvaluate(pageWSURL, `(() => ({scrollX: window.scrollX, scrollY: window.scrollY}))()`, true)
+	v, err := cdpEvaluate(pageWSURL, `(() => ({scrollX: window.scrollX, scrollY: window.scrollY}))()`, true)
+	return deliverTrusted, v, err
 }
 
-func cdpInsertText(pageWSURL, text string) error {
-	return cdpRequest(pageWSURL, "Input.insertText", map[string]any{"text": text}, nil)
+func cdpInsertText(pageWSURL, text string) (string, error) {
+	if ensureInputDelivery(pageWSURL) == deliverJS {
+		return deliverJS, jsInsertText(pageWSURL, text)
+	}
+	return deliverTrusted, cdpRequest(pageWSURL, "Input.insertText", map[string]any{"text": text}, nil)
 }
 
-func cdpDispatchKey(pageWSURL, key string, modifiers int) error {
+func cdpDispatchKey(pageWSURL, key string, modifiers int) (string, error) {
+	if ensureInputDelivery(pageWSURL) == deliverJS {
+		return deliverJS, jsDispatchKey(pageWSURL, key, modifiers)
+	}
 	info := keyInfo(key)
 	down := map[string]any{"type": "keyDown", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode, "modifiers": modifiers}
 	if info.Text != "" {
@@ -475,10 +601,10 @@ func cdpDispatchKey(pageWSURL, key string, modifiers int) error {
 		down["unmodifiedText"] = info.Text
 	}
 	if err := cdpRequest(pageWSURL, "Input.dispatchKeyEvent", down, nil); err != nil {
-		return err
+		return deliverTrusted, err
 	}
 	up := map[string]any{"type": "keyUp", "key": info.Key, "code": info.Code, "windowsVirtualKeyCode": info.VirtualKeyCode, "modifiers": modifiers}
-	return cdpRequest(pageWSURL, "Input.dispatchKeyEvent", up, nil)
+	return deliverTrusted, cdpRequest(pageWSURL, "Input.dispatchKeyEvent", up, nil)
 }
 
 // modifierMask parses "ctrl+shift", "cmd", etc. into the CDP modifiers

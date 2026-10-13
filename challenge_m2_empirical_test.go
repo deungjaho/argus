@@ -774,7 +774,7 @@ func TestChallengerRealChromeFeaturesE2E(t *testing.T) {
 	}
 
 	// Key dispatch on labeled input
-	err = cdpDispatchKey(ws, "Enter", 0)
+	_, err = cdpDispatchKey(ws, "Enter", 0)
 	if err != nil {
 		t.Errorf("cdpDispatchKey failed: %v", err)
 	}

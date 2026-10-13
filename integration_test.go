@@ -1070,7 +1070,7 @@ func TestIntegrationRecorderActionCapture(t *testing.T) {
 	// Perform a click action (which records to the recorder via End())
 	actionRec := BeginAction("click")
 	actionRec.SetTarget(getCurrentTargetID())
-	err = cdpDispatchMouseClick(ws, 50, 50, "left", 1)
+	_, err = cdpDispatchMouseClick(ws, 50, 50, "left", 1)
 	if err != nil {
 		t.Fatalf("cdpDispatchMouseClick failed: %v", err)
 	}

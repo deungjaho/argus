@@ -201,13 +201,18 @@ func registerInteractionTools(server *mcp.Server) {
 		if clickCount <= 0 {
 			clickCount = 1
 		}
-		if err := cdpDispatchMouseClick(ws, x, y, button, clickCount); err != nil {
+		delivered, err := cdpDispatchMouseClick(ws, x, y, button, clickCount)
+		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
 		result := map[string]any{
 			"action_id": string(rec.ID),
 			"clicked":   map[string]any{"x": x, "y": y, "button": button, "click_count": clickCount},
+			"delivered": delivered,
+		}
+		if delivered == deliverJS {
+			result["warning"] = "tab is hidden in background; used untrusted JS events (isTrusted=false). Use configure{focus:true} or bring the tab to front for trusted input."
 		}
 		settleAndCaptureVerification(rec, ws, result)
 		return nil, result, nil
@@ -234,11 +239,15 @@ func registerInteractionTools(server *mcp.Server) {
 		rec.SetTarget(getCurrentTargetID())
 		key := strings.TrimSpace(input.Key)
 		if key != "" {
-			if err := cdpDispatchKey(ws, key, modifierMask(input.Modifiers)); err != nil {
+			delivered, err := cdpDispatchKey(ws, key, modifierMask(input.Modifiers))
+			if err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
-			result := map[string]any{"action_id": string(rec.ID), "key": key}
+			result := map[string]any{"action_id": string(rec.ID), "key": key, "delivered": delivered}
+			if delivered == deliverJS {
+				result["warning"] = "tab is hidden; key sent via untrusted JS events (isTrusted=false). Use configure{focus:true} for trusted input."
+			}
 			settleAndCaptureVerification(rec, ws, result)
 			return nil, result, nil
 		}
@@ -278,10 +287,17 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 		}
 		if text != "" {
-			if err := cdpInsertText(ws, text); err != nil {
+			delivered, err := cdpInsertText(ws, text)
+			if err != nil {
 				rec.SetErrorFromError(err)
 				return nil, nil, err
 			}
+			result := map[string]any{"action_id": string(rec.ID), "typed": len([]rune(text)), "selector": selector, "cleared": input.Clear, "delivered": delivered}
+			if delivered == deliverJS {
+				result["warning"] = "tab is hidden; text inserted via untrusted JS (isTrusted=false). Use configure{focus:true} for trusted input."
+			}
+			settleAndCaptureVerification(rec, ws, result)
+			return nil, result, nil
 		}
 		result := map[string]any{"action_id": string(rec.ID), "typed": len([]rune(text)), "selector": selector, "cleared": input.Clear}
 		settleAndCaptureVerification(rec, ws, result)
@@ -489,12 +505,15 @@ func registerInteractionTools(server *mcp.Server) {
 				deltaY = amount
 			}
 		}
-		result, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
+		delivered, result, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
 		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		out := map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result}
+		out := map[string]any{"action_id": string(rec.ID), "x": x, "y": y, "delta_x": deltaX, "delta_y": deltaY, "result": result, "delivered": delivered}
+		if delivered == deliverJS {
+			out["warning"] = "tab is hidden; scrolled via untrusted JS scrollBy. Use configure{focus:true} for trusted wheel events."
+		}
 		settleAndCaptureVerification(rec, ws, out)
 		return nil, out, nil
 	})
@@ -532,11 +551,15 @@ func registerInteractionTools(server *mcp.Server) {
 			}
 			x, y = px, py
 		}
-		if err := cdpDispatchMouseHover(ws, x, y); err != nil {
+		delivered, err := cdpDispatchMouseHover(ws, x, y)
+		if err != nil {
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}
-		out := map[string]any{"action_id": string(rec.ID), "hovered": map[string]any{"x": x, "y": y}}
+		out := map[string]any{"action_id": string(rec.ID), "hovered": map[string]any{"x": x, "y": y}, "delivered": delivered}
+		if delivered == deliverJS {
+			out["warning"] = "tab is hidden; hover dispatched via untrusted JS events (isTrusted=false). Use configure{focus:true} for trusted input."
+		}
 		attachEvidence(rec, ws, out)
 		rec.SetResult(out)
 		return nil, out, nil
@@ -656,10 +679,12 @@ func registerInteractionTools(server *mcp.Server) {
 				if err != nil {
 					return err
 				}
-				if err := cdpDispatchMouseClick(ws, x, y, "left", 1); err != nil {
+				delivered, err := cdpDispatchMouseClick(ws, x, y, "left", 1)
+				if err != nil {
 					return err
 				}
 				stepRes["clicked"] = map[string]any{"x": x, "y": y}
+				stepRes["delivered"] = delivered
 
 			case "fill":
 				val := expandVars(resolveValue(step.Value, step.Text, step.Input))
@@ -712,10 +737,12 @@ func registerInteractionTools(server *mcp.Server) {
 							return err
 						}
 					}
-					if err := cdpDispatchKey(ws, key, modifierMask(step.Modifiers)); err != nil {
+					delivered, err := cdpDispatchKey(ws, key, modifierMask(step.Modifiers))
+					if err != nil {
 						return err
 					}
 					stepRes["key"] = key
+					stepRes["delivered"] = delivered
 				} else {
 					text := resolveValue(step.Text, step.Value, step.Input)
 					text = expandVars(text)
@@ -730,9 +757,11 @@ func registerInteractionTools(server *mcp.Server) {
 						}
 					}
 					if text != "" {
-						if err := cdpInsertText(ws, text); err != nil {
+						delivered, err := cdpInsertText(ws, text)
+						if err != nil {
 							return err
 						}
+						stepRes["delivered"] = delivered
 					}
 					stepRes["typed"] = len([]rune(text))
 				}
@@ -748,10 +777,12 @@ func registerInteractionTools(server *mcp.Server) {
 				if err != nil {
 					return err
 				}
-				if err := cdpDispatchMouseHover(ws, px, py); err != nil {
+				delivered, err := cdpDispatchMouseHover(ws, px, py)
+				if err != nil {
 					return err
 				}
 				stepRes["hovered"] = map[string]any{"x": px, "y": py}
+				stepRes["delivered"] = delivered
 
 			case "scroll":
 				deltaX := step.DeltaX
@@ -760,10 +791,11 @@ func registerInteractionTools(server *mcp.Server) {
 					deltaY = 500
 				}
 				x, y, _ := resolveScrollPoint(ws, scrollInput{})
-				_, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
+				delivered, _, err := cdpDispatchScroll(ws, x, y, deltaX, deltaY)
 				if err != nil {
 					return err
 				}
+				stepRes["delivered"] = delivered
 				stepRes["scrolled"] = map[string]any{"delta_x": deltaX, "delta_y": deltaY}
 
 			case "navigate":
