@@ -70,10 +70,17 @@ func main() {
 	// `argus activate <tab_id>` — one-shot CLI used by `beacon jump --tab`:
 	// brings the tab to the foreground and exits. No MCP server.
 	if fs.NArg() >= 2 && fs.Arg(0) == "activate" {
-		if err := cdpActivateTarget(fs.Arg(1)); err != nil {
+		tabID := fs.Arg(1)
+		if err := cdpActivateTarget(tabID); err != nil {
 			fmt.Fprintln(os.Stderr, "activate:", err)
 			os.Exit(1)
 		}
+		// User-initiated jump: un-minimize the hosting window so the tab is
+		// actually visible (attached sessions park windows minimized).
+		if winID, err := cdpWindowForTarget(tabID); err == nil {
+			_ = cdpSetWindowState(winID, "normal")
+		}
+		fmt.Printf("activated %s\n", tabID)
 		return
 	}
 	// `argus last-pick` — print the latest picker capture from the current
