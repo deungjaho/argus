@@ -24,6 +24,7 @@ type evalInput struct {
 	Script       string `json:"script,omitempty"`
 	Expression   string `json:"expression,omitempty"`
 	Code         string `json:"code,omitempty"`
+	JS           string `json:"js,omitempty"`
 	AwaitPromise bool   `json:"await_promise,omitempty"`
 	TimeoutMs    int    `json:"timeout_ms,omitempty"` // CDP call timeout (default 10s); raise for long await_promise work
 	Timeout      int    `json:"timeout,omitempty"`
@@ -125,9 +126,14 @@ func registerEmulateTools(server *mcp.Server) {
 		rec := BeginAction("eval")
 		defer rec.End()
 
-		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID, input.Target)
+		targetID := resolveFirstNonEmpty(input.TargetID, input.TabID)
+		if targetID == "" && input.Target != "" && !looksLikeURL(input.Target) {
+			targetID = input.Target
+		}
 		if targetID != "" {
 			setCurrentTargetID(targetID)
+		} else if input.Target != "" && looksLikeURL(input.Target) {
+			setConfig(input.Target, 0, nil)
 		}
 		ws, err := requireTargetWS()
 		if err != nil {
@@ -136,9 +142,9 @@ func registerEmulateTools(server *mcp.Server) {
 		}
 		rec.SetTarget(getCurrentTargetID())
 		rec.SetParams(input)
-		script := resolveFirstNonEmpty(input.Script, input.Expression, input.Code)
+		script := resolveFirstNonEmpty(input.Script, input.Expression, input.Code, input.JS)
 		if script == "" {
-			err := fmt.Errorf("eval requires script or expression")
+			err := fmt.Errorf("eval requires script, expression, or js")
 			rec.SetErrorFromError(err)
 			return nil, nil, err
 		}

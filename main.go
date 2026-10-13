@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -54,10 +55,37 @@ func main() {
 	fs.StringVar(&toolsets, "toolsets", "", "comma-separated capability sets to expose on top of the always-on default loop (default,core,diagnose,debug,full). 'full' exposes everything including deprecated aliases + escape hatches. Also set ARGUS_TOOLSETS env.")
 	var doctor bool
 	fs.BoolVar(&doctor, "doctor", false, "run diagnostic checks and exit")
+	var usage bool
+	var usageLog string
+	fs.BoolVar(&usage, "usage", false, "display agent tool usage and habit analysis report and exit")
+	fs.StringVar(&usageLog, "usage-log", "", "custom path to agent usage log file for analysis")
+	var fixturesAddr string
+	fs.StringVar(&fixturesAddr, "fixtures", "", "serve the e2e/eval fixture pages and API endpoints on this address (e.g. :8801) instead of running the MCP server")
+	var evalExpr string
+	fs.StringVar(&evalExpr, "eval", "", "evaluate a JS expression once against the configured target and print the JSON result (one-shot mode for oracles/scripts)")
+	var awaitPromise bool
+	fs.BoolVar(&awaitPromise, "await", false, "await promise result in --eval mode")
 	_ = fs.Parse(os.Args[1:])
 
 	if debug {
 		logLevel = LogDebug
+	}
+
+	if fixturesAddr != "" {
+		logInfo("serving fixtures on %s", fixturesAddr)
+		if err := http.ListenAndServe(fixturesAddr, newFixtureMux()); err != nil {
+			logError("fixtures server: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if usage {
+		if err := PrintUsageReport(usageLog); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Apply initial config from flags / env
@@ -100,6 +128,7 @@ func main() {
 		return
 	}
 
+	globalTelemetry = initTelemetry()
 	logInfo("toolsets: %s (%d tools enabled)", toolsets, len(enabledTools))
 	go cleanupScreenshots()
 
@@ -108,6 +137,22 @@ func main() {
 		setConfig(url, port, attachPtr)
 	} else if attach {
 		setConfig("", 0, attachPtr)
+	}
+
+	if evalExpr != "" {
+		ws, err := requireTargetWS()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		value, err := cdpEvaluateTimeout(ws, evalExpr, awaitPromise, 10*time.Second)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		out, _ := json.Marshal(value)
+		fmt.Println(string(out))
+		return
 	}
 
 	// Graceful shutdown: all exit paths (signal, stdin EOF, server error)
@@ -170,7 +215,14 @@ func addTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHa
 	if !toolEnabled(tool.Name) {
 		return
 	}
-	mcp.AddTool(server, tool, handler)
+	wrappedHandler := func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
+		start := time.Now()
+		res, out, err := handler(ctx, req, input)
+		duration := time.Since(start)
+		recordToolCall(tool.Name, input, duration, err, out)
+		return res, out, err
+	}
+	mcp.AddTool(server, tool, wrappedHandler)
 }
 
 // noInput is a zero-struct for tools that take no parameters.

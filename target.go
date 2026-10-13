@@ -125,7 +125,33 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 		}
 		// Target disappeared — clear stale ID
 		clearCurrentTargetID()
-		// Don't silently switch; return error if we had an explicit target
+		// If URL is configured, attempt fallback to match a live tab by URL before failing
+		if url != "" {
+			if target := findTargetByURL(targets, url); target != nil {
+				setCurrentTargetID(target.ID)
+				if target.URL != "" {
+					rec.SetCurrentURL(target.ID, target.URL)
+				}
+				return target, nil
+			}
+		}
+		// In attach mode, if exactly one page tab exists, automatically re-attach to it
+		if attach {
+			var pageTargets []*browserTarget
+			for i := range targets {
+				if targets[i].Type == "page" && strings.TrimSpace(targets[i].ParentID) == "" {
+					tCopy := targets[i]
+					pageTargets = append(pageTargets, &tCopy)
+				}
+			}
+			if len(pageTargets) == 1 {
+				setCurrentTargetID(pageTargets[0].ID)
+				if pageTargets[0].URL != "" {
+					rec.SetCurrentURL(pageTargets[0].ID, pageTargets[0].URL)
+				}
+				return pageTargets[0], nil
+			}
+		}
 		return nil, fmt.Errorf("target %s no longer exists (tab closed or Chrome restarted); call select_tab or open to choose a new target", id)
 	}
 

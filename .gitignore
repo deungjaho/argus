@@ -1,5 +1,6 @@
 # Build artifacts
 /argus
+/argus-eval
 /bin/
 *.exe
 

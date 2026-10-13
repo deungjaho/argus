@@ -66,8 +66,12 @@ func screenshotResult(input screenshotInput) (*mcp.CallToolResult, any, error) {
 	if targetID := resolveFirstNonEmpty(input.TargetID, input.TabID); targetID != "" {
 		setCurrentTargetID(targetID)
 	} else if input.Target != "" {
-		setCurrentTargetID(input.Target)
-		targetUsedAsTabID = true
+		if !looksLikeURL(input.Target) {
+			setCurrentTargetID(input.Target)
+			targetUsedAsTabID = true
+		} else {
+			setConfig(input.Target, 0, nil)
+		}
 	}
 	target, err := requireTarget()
 	if err != nil {
