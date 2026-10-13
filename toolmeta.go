@@ -30,6 +30,7 @@ var toolMetaRegistry = []ToolMeta{
 	{Name: "query", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Structured DOM query: per-element text/box/classes/attrs with reusable refs; '>>>' pierces shadow DOM."},
 	{Name: "get_picked", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Return latest user-picked element locator (picker capture) with fallbacks."},
 	{Name: "record", Capability: CapCore, SideEffects: []string{"records_user_input"}, Sensitivity: "medium", Idempotent: false, Description: "Capture real user input as replayable action trace (start/stop/status)."},
+	{Name: "session", Capability: CapCore, SideEffects: []string{"creates_window"}, Sensitivity: "medium", Idempotent: false, Description: "Manage browsing sessions (start/stop/list/reveal/hide), incl. login-state fork."},
 
 	// --- Act & Interact (Default Loop & Core) ---
 	{Name: "click", Capability: CapDefault, SideEffects: []string{"clicks_element"}, Sensitivity: "low", Idempotent: false, Description: "Click an element by ref/selector/coordinates."},

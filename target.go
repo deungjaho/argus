@@ -90,6 +90,10 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 	url, _, attach := getConfig()
 	url = strings.TrimSpace(url)
 
+	if resolved, isSession := sessionResolveTab(targetID); isSession {
+		targetID = resolved
+	}
+
 	if _, err := cdpVersion(); err != nil {
 		if attach {
 			return nil, fmt.Errorf("CDP endpoint not reachable at %s (attach mode): %w", cdpBaseURL(), err)
@@ -116,7 +120,11 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 	}
 
 	// 1. Try targetID first (stable identity)
-	if id := getCurrentTargetID(); id != "" {
+	id := getCurrentTargetID()
+	if resolved, isSession := sessionResolveTab(id); isSession {
+		id = resolved
+	}
+	if id != "" {
 		if target := findTargetByID(targets, id); target != nil {
 			if target.URL != "" {
 				rec.SetCurrentURL(target.ID, target.URL)
