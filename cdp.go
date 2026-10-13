@@ -337,7 +337,9 @@ func cdpCreateTarget(browserWSURL, targetURL string, background bool) (string, e
 	}, &result); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(result.TargetID), nil
+	tabID := strings.TrimSpace(result.TargetID)
+	beaconRegisterTab(tabID, targetURL)
+	return tabID, nil
 }
 
 func cdpCloseTarget(targetID string) error {
@@ -349,7 +351,11 @@ func cdpCloseTarget(targetID string) error {
 	if err != nil {
 		return err
 	}
-	return cdpRequest(version.WebSocketDebuggerURL, "Target.closeTarget", map[string]any{"targetId": targetID}, nil)
+	err = cdpRequest(version.WebSocketDebuggerURL, "Target.closeTarget", map[string]any{"targetId": targetID}, nil)
+	if err == nil {
+		beaconUnregisterTab(targetID)
+	}
+	return err
 }
 
 func cdpActivateTarget(targetID string) error {

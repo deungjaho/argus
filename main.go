@@ -67,6 +67,16 @@ func main() {
 	fs.BoolVar(&awaitPromise, "await", false, "await promise result in --eval mode")
 	_ = fs.Parse(os.Args[1:])
 
+	// `argus activate <tab_id>` — one-shot CLI used by `beacon jump --tab`:
+	// brings the tab to the foreground and exits. No MCP server.
+	if fs.NArg() >= 2 && fs.Arg(0) == "activate" {
+		if err := cdpActivateTarget(fs.Arg(1)); err != nil {
+			fmt.Fprintln(os.Stderr, "activate:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if debug {
 		logLevel = LogDebug
 	}
@@ -218,6 +228,7 @@ func addTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHa
 	}
 	wrappedHandler := func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, Out, error) {
 		start := time.Now()
+		maybeRunTabGC()
 		res, out, err := handler(ctx, req, input)
 		duration := time.Since(start)
 		recordToolCall(tool.Name, input, duration, err, out)
