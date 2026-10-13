@@ -194,6 +194,7 @@ func elementStateExpression(selector, text, expectMark string) string {
 const selector = %s;
 const text = %s;
 const expectMark = %s;
+`+argusQueryJS+`
 const visible = (el) => {
   if (!el) return false;
   const style = getComputedStyle(el);
@@ -208,14 +209,7 @@ const enabled = (el) => {
 };
 let el = null;
 if (selector) {
-  try {
-    el = document.querySelector(selector);
-  } catch (e) {
-    el = document.getElementById(selector) ||
-         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
-  }
+  el = argusResolve(selector);
 }
 `+rankedTextMatchJS+`
 if (!el) return {found: false, visible: false, enabled: false};
@@ -242,6 +236,7 @@ if (expectMark && el.getAttribute('data-argus-m') !== expectMark) {
   return {found: false, stale: true, tag: el.localName};
 }
 el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+window.__argusHitEl = el;
 const rect = el.getBoundingClientRect();
 return {
   found: true,
@@ -270,7 +265,8 @@ func autoWaitForSelector(ws, selector string, opts autoWaitOptions) (map[string]
 	pollDuration := time.Duration(poll) * time.Millisecond
 	for {
 		value, err := cdpEvaluate(ws, fmt.Sprintf(`(() => {
-const el = document.querySelector(%s);
+`+argusQueryJS+`
+const el = argusFind(%s);
 if (!el) return {found: false};
 let targetEl = el;
 if (targetEl.tagName === 'INPUT') {

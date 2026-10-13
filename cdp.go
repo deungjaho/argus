@@ -504,6 +504,27 @@ func ensureInputDelivery(ws string) string {
 	return deliverJS
 }
 
+// jsHitPickJS picks the element for a JS-dispatched input at (x, y):
+// prefer the element argus just resolved (window.__argusHitEl) when its
+// rect still contains the point — this preserves shadow-DOM targets that
+// elementFromPoint retargets to the host. Otherwise pierce shadow roots.
+const jsHitPickJS = `
+const argusHitPick = (x, y) => {
+  const h = window.__argusHitEl;
+  if (h && h.isConnected) {
+    const r = h.getBoundingClientRect();
+    if (x >= r.left - 4 && x <= r.right + 4 && y >= r.top - 4 && y <= r.bottom + 4) return h;
+  }
+  let el = document.elementFromPoint(x, y);
+  let guard = 0;
+  while (el && el.shadowRoot && guard++ < 8) {
+    const deeper = el.shadowRoot.elementFromPoint(x, y);
+    if (!deeper || deeper === el) break;
+    el = deeper;
+  }
+  return el;
+};`
+
 func jsClickAt(ws string, x, y float64, button string, clickCount int) error {
 	btn := 0
 	switch button {
@@ -513,7 +534,8 @@ func jsClickAt(ws string, x, y float64, button string, clickCount int) error {
 		btn = 2
 	}
 	expr := fmt.Sprintf(`(() => {
-const el = document.elementFromPoint(%v, %v);
+%s
+const el = argusHitPick(%v, %v);
 if (!el) throw new Error('no element at point (%v, %v)');
 const Ctor = t => t.startsWith('pointer') ? PointerEvent : MouseEvent;
 for (let i = 0; i < %d; i++) {
@@ -522,20 +544,21 @@ for (let i = 0; i < %d; i++) {
   }
 }
 return el.tagName + (el.id ? '#'+el.id : '');
-})()`, x, y, x, y, clickCount, x, y, btn)
+})()`, jsHitPickJS, x, y, x, y, clickCount, x, y, btn)
 	_, err := cdpEvaluate(ws, expr, true)
 	return err
 }
 
 func jsMouseMoveAt(ws string, x, y float64) error {
 	expr := fmt.Sprintf(`(() => {
-const el = document.elementFromPoint(%v, %v);
+%s
+const el = argusHitPick(%v, %v);
 if (!el) return null;
 for (const [t, E] of [['pointerover',PointerEvent],['mouseover',MouseEvent],['mouseenter',MouseEvent],['mousemove',MouseEvent]]) {
   el.dispatchEvent(new E(t, {bubbles: t !== 'mouseenter', composed:true, clientX:%v, clientY:%v}));
 }
 return true;
-})()`, x, y, x, y)
+})()`, jsHitPickJS, x, y, x, y)
 	_, err := cdpEvaluate(ws, expr, true)
 	return err
 }

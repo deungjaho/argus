@@ -941,15 +941,8 @@ func extractExpression(selector, attr string) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const attr = %s;
-let el = null;
-try {
-  el = document.querySelector(selector);
-} catch (e) {
-  el = document.getElementById(selector) ||
-       document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
-       document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
-       document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
-}
+`+argusQueryJS+`
+const el = argusResolve(selector);
 if (!el) throw new Error('extract: element not found');
 if (attr.startsWith('attr:')) return el.getAttribute(attr.slice(5)) || '';
 if (attr === 'value') return 'value' in el ? String(el.value) : '';
@@ -987,16 +980,10 @@ func focusExpression(selector string, clear bool) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const clear = %s;
+`+argusQueryJS+`
 let el = null;
 if (selector) {
-  try {
-    el = document.querySelector(selector);
-  } catch (e) {
-    el = document.getElementById(selector) ||
-         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
-  }
+  el = argusResolve(selector);
 } else {
   el = document.activeElement;
 }
@@ -1044,16 +1031,10 @@ func fillExpression(selector, text string) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const text = %s;
+`+argusQueryJS+`
 let el = null;
 if (selector) {
-  try {
-    el = document.querySelector(selector);
-  } catch (e) {
-    el = document.getElementById(selector) ||
-         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
-  }
+  el = argusResolve(selector);
 } else {
   el = document.activeElement;
 }
@@ -1160,7 +1141,8 @@ func selectOptionExpression(selector string, values []string) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const values = %s;
-const el = document.querySelector(selector);
+`+argusQueryJS+`
+const el = argusFind(selector);
 if (!el) throw new Error('element not found');
 if (el.tagName !== 'SELECT') throw new Error('element is not a <select>');
 const opts = Array.from(el.options);
@@ -1186,9 +1168,10 @@ const visible = (el) => {
   const rect = el.getBoundingClientRect();
   return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
 };
+`+argusQueryJS+`
 const findEl = (selector, text) => {
   let el = null;
-  if (selector) el = document.querySelector(selector);
+  if (selector) el = argusResolve(selector);
 `+rankedTextMatchJS+`
   return el;
 };

@@ -250,6 +250,7 @@ func registerAllTools(server *mcp.Server) {
 	registerEmulateTools(server)
 	registerStorageTools(server)
 	registerElementTools(server)
+	registerQueryTools(server)
 	registerInterceptTools(server)
 	registerTraceTools(server)
 }

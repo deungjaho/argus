@@ -167,16 +167,10 @@ func getElementExpression(selector, text, include string) string {
 	return fmt.Sprintf(`(() => {
 const selector = %s;
 const text = %s;
+`+argusQueryJS+`
 let el = null;
 if (selector) {
-  try {
-    el = document.querySelector(selector);
-  } catch (e) {
-    el = document.getElementById(selector) ||
-         document.querySelector('[data-testid=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[data-test-id=' + JSON.stringify(selector) + ']') ||
-         document.querySelector('[aria-label=' + JSON.stringify(selector) + ']');
-  }
+  el = argusResolve(selector);
 }
 `+rankedTextMatchJS+`
 if (!el) return {found: false};
