@@ -20,7 +20,7 @@ import (
 // First-class session API (argus#19/#12/#13). A session groups tabs under a
 // stable session_id keyed by owner (TMUX_PANE). Modes:
 //   shared   — tabs in the user's existing window (zero UI cost, default)
-//   attached — dedicated window in the shared Chrome Argus (createBrowserContext
+//   attached — dedicated window in the shared Chrome instance (createBrowserContext
 //              + newWindow), minimized immediately so it never pops on screen;
 //              reveal/hide toggles visibility for supervision. Never activates
 //              the Chrome app — the user's screen is not stolen.
@@ -33,20 +33,20 @@ import (
 // processes (one per MCP client/pane) share the same view of the shared Chrome.
 
 type argusSession struct {
-	ID        string   `json:"id"`
-	Mode      string   `json:"mode"`
-	Owner     string   `json:"owner"`
-	ContextID string   `json:"browser_context_id,omitempty"`
-	Tabs      []string `json:"tabs"`
-	WindowID  int      `json:"window_id,omitempty"`
-	HomeURL   string   `json:"url"`
-	CreatedAt int64    `json:"created_at"`
-	CDPPort   int      `json:"cdp_port,omitempty"`
-	PrevPort  int      `json:"prev_port,omitempty"`
-	PID       int      `json:"pid,omitempty"`
-	Profile   string   `json:"profile_dir,omitempty"`
-	Revealed  bool     `json:"revealed,omitempty"`
-	ForkedFrom string  `json:"forked_from,omitempty"`
+	ID         string   `json:"id"`
+	Mode       string   `json:"mode"`
+	Owner      string   `json:"owner"`
+	ContextID  string   `json:"browser_context_id,omitempty"`
+	Tabs       []string `json:"tabs"`
+	WindowID   int      `json:"window_id,omitempty"`
+	HomeURL    string   `json:"url"`
+	CreatedAt  int64    `json:"created_at"`
+	CDPPort    int      `json:"cdp_port,omitempty"`
+	PrevPort   int      `json:"prev_port,omitempty"`
+	PID        int      `json:"pid,omitempty"`
+	Profile    string   `json:"profile_dir,omitempty"`
+	Revealed   bool     `json:"revealed,omitempty"`
+	ForkedFrom string   `json:"forked_from,omitempty"`
 }
 
 var sessionStoreMu sync.Mutex
@@ -352,7 +352,7 @@ func launchIsolatedChrome(port int, profile string) (int, error) {
 	bin := appPath
 	if strings.HasSuffix(appPath, ".app") {
 		bin = ""
-		for _, name := range []string{"chrome-argus.bin", "chrome-argus", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
+		for _, name := range []string{"Google Chrome", "Google Chrome for Testing", "Chromium"} {
 			p := filepath.Join(appPath, "Contents", "MacOS", name)
 			if fileExists(p) {
 				bin = p

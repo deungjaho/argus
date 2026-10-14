@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// ForbiddenCDPPort is the host Chrome Argus CDP port (127.0.0.1:9224), strictly off-limits to all tests.
+// ForbiddenCDPPort is the host agent Chrome CDP port (127.0.0.1:9224), strictly off-limits to all tests.
 const ForbiddenCDPPort = 9224
 
 // SafeDummyPort is the non-existent port used to neutralize Argus when tests complete.
@@ -311,13 +311,10 @@ func LaunchIsolatedChromeWithContext(ctx context.Context) (*IsolatedChromeInstan
 }
 
 // resolveRawChromeBinary resolves the direct executable path to Chrome.
-// It explicitly rejects macOS .app bundles and wrapper shell scripts that hardcode port 9224.
+// It explicitly rejects macOS .app bundles and wrapper shell scripts.
 func resolveRawChromeBinary() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("ARGUS_CHROME_BINARY")); custom != "" {
 		if fileExists(custom) {
-			if strings.HasSuffix(custom, "/chrome-argus") && fileExists(custom+".bin") {
-				return custom + ".bin", nil
-			}
 			return custom, nil
 		}
 		return "", fmt.Errorf("ARGUS_CHROME_BINARY specified (%s) but file not found", custom)
@@ -329,7 +326,6 @@ func resolveRawChromeBinary() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		candidates = []string{
-			"/Applications/Chrome Argus.app/Contents/MacOS/chrome-argus.bin",
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 			"/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
 			"/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -361,14 +357,6 @@ func resolveRawChromeBinary() (string, error) {
 
 	for _, c := range candidates {
 		if fileExists(c) {
-			// If candidate is the wrapper script, substitute with .bin sibling
-			if strings.HasSuffix(c, "/chrome-argus") {
-				binSibling := c + ".bin"
-				if fileExists(binSibling) {
-					return binSibling, nil
-				}
-				continue
-			}
 			return c, nil
 		}
 	}

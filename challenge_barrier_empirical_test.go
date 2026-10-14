@@ -342,7 +342,7 @@ func TestChallengerLsofUntouchedPort9224(t *testing.T) {
 	if err == nil {
 		outStr := string(output)
 		if strings.Contains(outStr, "chrome") {
-			t.Logf("CONFIRMED: Pre-existing host Chrome Argus instance remains untouched on port 9224:\n%s", outStr)
+			t.Logf("CONFIRMED: Pre-existing host agent Chrome instance remains untouched on port 9224:\n%s", outStr)
 			return
 		}
 		t.Fatalf("CRITICAL SECURITY VIOLATION: Unknown process on host port 9224 in LISTEN state!\nOutput:\n%s", outStr)
