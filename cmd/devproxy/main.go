@@ -261,6 +261,18 @@ func serve() {
 			http.Error(w, fmt.Sprintf("devproxy: no route for slug %q (devproxy register <path>)", slug), http.StatusBadGateway)
 			return
 		}
+		// 活性回收：worktree 目录没了的路由是死路由——摘除并回收 slug，免得永久 502
+		if _, err := os.Stat(r.Path); err != nil {
+			withRoutes(func(m map[string]route) {
+				if cur, ok := m[slug]; ok && cur.Path == r.Path {
+					delete(m, slug)
+					saveRoutes(m)
+				}
+			})
+			unpushBeacon(r.Path)
+			http.Error(w, fmt.Sprintf("devproxy: route %q reaped — worktree %s is gone", slug, r.Path), http.StatusGone)
+			return
+		}
 		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", r.Port)}
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		proxy.FlushInterval = 50 * time.Millisecond
