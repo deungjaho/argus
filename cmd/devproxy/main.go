@@ -128,6 +128,15 @@ func main() {
 		abs := absPath(p)
 		r := route{Slug: slugFor(abs), Path: abs, Port: portFor(abs)}
 		m := loadRoutes()
+		if old, ok := m[r.Slug]; ok && old.Path != r.Path {
+			fmt.Fprintf(os.Stderr, "devproxy: slug %q already routes to %s — pick a distinct directory name\n", r.Slug, old.Path)
+			os.Exit(1)
+		}
+		for slug, old := range m {
+			if slug != r.Slug && old.Port == r.Port {
+				fmt.Fprintf(os.Stderr, "devproxy: warning: port %d shared with %s (%s.dev.localhost)\n", r.Port, old.Path, slug)
+			}
+		}
 		m[r.Slug] = r
 		saveRoutes(m)
 		pushBeacon(r)
@@ -173,7 +182,10 @@ func pushBeacon(r route) {
 	common, _ := exec.Command("git", "-C", r.Path, "rev-parse", "--git-common-dir").Output()
 	repo := ""
 	if c := strings.TrimSpace(string(common)); c != "" {
-		repo = filepath.Base(filepath.Dir(c)) // <repo>/.git
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(r.Path, c) // ".git" in the main checkout
+		}
+		repo = filepath.Base(filepath.Dir(c))
 	}
 	meta, _ := json.Marshal(map[string]any{
 		"path":   r.Path,
