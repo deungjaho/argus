@@ -22,6 +22,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -129,6 +130,7 @@ func main() {
 		m := loadRoutes()
 		m[r.Slug] = r
 		saveRoutes(m)
+		pushBeacon(r)
 		fmt.Printf("%s.%s -> 127.0.0.1:%d  (%s)\n", r.Slug, domain, r.Port, r.Path)
 
 	case "unregister":
@@ -136,6 +138,7 @@ func main() {
 		m := loadRoutes()
 		delete(m, slugFor(abs))
 		saveRoutes(m)
+		unpushBeacon(abs)
 
 	case "list":
 		m := loadRoutes()
@@ -157,6 +160,39 @@ func firstOr(s []string, d string) string {
 		return d
 	}
 	return s[0]
+}
+
+// pushBeacon reports the worktree to beacon's resource registry. Best-effort:
+// beacon may be absent — routing must never depend on it.
+func pushBeacon(r route) {
+	beacon, err := exec.LookPath("beacon")
+	if err != nil {
+		return
+	}
+	branch, _ := exec.Command("git", "-C", r.Path, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	common, _ := exec.Command("git", "-C", r.Path, "rev-parse", "--git-common-dir").Output()
+	repo := ""
+	if c := strings.TrimSpace(string(common)); c != "" {
+		repo = filepath.Base(filepath.Dir(c)) // <repo>/.git
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"path":   r.Path,
+		"port":   r.Port,
+		"slug":   r.Slug,
+		"branch": strings.TrimSpace(string(branch)),
+		"repo":   repo,
+	})
+	args := []string{"register", "worktree", r.Path, "--producer", "devproxy", "--data", string(meta)}
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		args = append(args, "--pane", pane)
+	}
+	_ = exec.Command(beacon, args...).Run()
+}
+
+func unpushBeacon(abs string) {
+	if beacon, err := exec.LookPath("beacon"); err == nil {
+		_ = exec.Command(beacon, "unregister", "worktree", abs).Run()
+	}
 }
 
 func serve() {
