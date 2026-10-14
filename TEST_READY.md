@@ -69,7 +69,7 @@ go test -v -tags=integration -count=1 -timeout 5m -run "TestE2E_Tier5_" ./...
 ## 3. Verified System Invariants
 
 1. **Host CDP Port 9224 Zero-Touch**:
-   - Host Chrome Argus process (`PID 41915`) on `127.0.0.1:9224` was monitored before, during, and after all test runs (`lsof -nP -iTCP:9224 -sTCP:LISTEN`).
+   - Host agent Chrome process (`PID 41915`) on `127.0.0.1:9224` was monitored before, during, and after all test runs (`lsof -nP -iTCP:9224 -sTCP:LISTEN`).
    - Port 9224 remained completely untouched and strictly isolated at all times.
 2. **Ephemeral Dynamic Port Allocation**:
    - Every isolated browser instance uses `StartIsolatedChrome(t)` allocating dynamic ports (e.g. 49152–65535) and unique temporary profiles (`t.TempDir()`), automatically wiped on test completion.

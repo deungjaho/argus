@@ -46,7 +46,7 @@ Milestone 5 establishes the **Final End-to-End (E2E) Acceptance Testing Infrastr
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                     Isolated Headless Chrome Instance (OS Child Process)                │
 │                                                                                        │
-│   • Binary:     /Applications/Chrome Argus.app/Contents/MacOS/chrome-argus.bin         │
+│   • Binary:     /Applications/Google Chrome.app/Contents/MacOS/Google Chrome         │
 │                 (Raw binary directly spawned via exec.Command; NO /usr/bin/open)       │
 │   • Port:       Allocated dynamically via net.Listen("tcp", "127.0.0.1:0")             │
 │   • Flags:      --headless=new --disable-gpu --remote-debugging-port=<Port>            │
@@ -56,7 +56,7 @@ Milestone 5 establishes the **Final End-to-End (E2E) Acceptance Testing Infrastr
 ```
 
 1. **Opaque-Box Requirement-Driven Testing**: Tests interact primarily through the standardized MCP protocol surface (`cs.CallTool`), simulating authentic agent tool execution rather than calling internal helper functions directly.
-2. **Strict Browser & Host Isolation**: The permanent user Chrome Argus instance (`127.0.0.1:9224`) is sacrosanct. Any dial, connection, or probe touching 9224 will trip a hard panic barrier immediately.
+2. **Strict Browser & Host Isolation**: The permanent agent Chrome instance (`127.0.0.1:9224`) is sacrosanct. Any dial, connection, or probe touching 9224 will trip a hard panic barrier immediately.
 3. **Deterministic Process & Directory Lifecycle**: Every isolated Chrome instance is tracked, cleanly terminated via CDP `Browser.close` with bounded fallback to OS kill, and its temporary profile directory is completely wiped from disk.
 4. **Zero-Impact on Regular Unit Testing**: Regular unit tests (`make test`) must execute with mandatory `-short` mode in <15s without ever launching or requiring Chrome.
 
@@ -70,7 +70,7 @@ To guarantee absolute non-interference with host processes and active user sessi
 
 | # | Commandment | Implementation Mechanism | Safety Objective |
 |---|---|---|---|
-| **1** | **Direct Raw Binary Execution Only** | Resolve `chrome-argus.bin` or raw Chrome binary directly via `exec.CommandContext`. Never use `/usr/bin/open` or `.app` wrapper scripts. | Completely bypasses macOS LaunchServices, preventing blank windows and popups on the user's desktop screen. |
+| **1** | **Direct Raw Binary Execution Only** | Resolve the raw Chrome binary directly via `exec.CommandContext`. Never use `/usr/bin/open` or `.app` wrapper scripts. | Completely bypasses macOS LaunchServices, preventing blank windows and popups on the user's desktop screen. |
 | **2** | **Forced Modern Headless Mode** | CLI flags `--headless=new` and `--disable-gpu` supplied on every launch. | Guarantees zero GUI window creation across macOS, Linux, and Windows. |
 | **3** | **Dedicated Ephemeral User Profile** | `tmpDir, err := os.MkdirTemp("", fmt.Sprintf("argus-isolated-%d-*", port))`. | Absolute partition of cookies, localStorage, cache, and history; never touches `~/.config/argus/chrome-profile`. |
 | **4** | **Dynamic Ephemeral Port Allocation** | Kernel port binding via `net.Listen("tcp", "127.0.0.1:0")`, extracting dynamic port. | Eliminates port collisions and allows fully concurrent test executions. |
@@ -318,7 +318,7 @@ An E2E test execution run is declared **SUCCESSFUL** if and only if all of the f
 
 ### 7.2 Strict Environmental Isolation Invariants
 1. **Zero Host Connections to 9224**: No test may connect, ping, or communicate with `127.0.0.1:9224`. Any violation triggers an immediate panic in `assertSafePort(port)` and terminates the run.
-2. **Zero Leaked Chrome Processes**: After `t.Cleanup()` executes, no orphan `chrome-argus.bin` or Chrome child process remains alive. Verified via child process wait and PID verification.
+2. **Zero Leaked Chrome Processes**: After `t.Cleanup()` executes, no orphan Chrome child process remains alive. Verified via child process wait and PID verification.
 3. **Zero Leaked Temporary Directories**: The temporary profile directory `argus-isolated-<port>-*` must be completely removed from `/tmp`.
 4. **Deterministic Port Reset**: Global Argus configuration is safely restored to `SafeDummyPort = 59999` with `attach=true`.
 

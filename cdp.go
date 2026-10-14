@@ -208,7 +208,7 @@ func cdpTargets() ([]browserTarget, error) {
 	_, _, isAttach := getConfig()
 	if err != nil && isAttach {
 		// Attach mode: the configured browser may simply not be running.
-		// Try to launch Chrome Argus once and give it a moment to come up.
+		// Try to launch Chrome once and give it a moment to come up.
 		tryAutostartBrowser()
 		targets, err = listCDPTargets()
 	}

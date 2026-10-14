@@ -123,6 +123,6 @@ To prevent merge conflicts during concurrent execution:
 
 1. **Host Port 9224 is SACROSANCT**: Absolutely FORBIDDEN to dial, ping, or connect to `127.0.0.1:9224`. An anti-9224 panic barrier in test code will panic immediately if 9224 is attempted.
 2. **Mandatory `-short` for Unit Tests**: Regular test runs MUST include `-short` (`go test -short ./...`) to ensure no unmocked tests ever trigger Chrome launches.
-3. **No macOS LaunchServices open Commands**: Raw binary `/Applications/Chrome Argus.app/Contents/MacOS/chrome-argus.bin` MUST be executed directly via `exec.Command` with `--headless=new` and `mktemp -d` user data directories.
+3. **No macOS LaunchServices open Commands**: Raw binary `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` MUST be executed directly via `exec.Command` with `--headless=new` and `mktemp -d` user data directories.
 4. **ARGUS_ATTACH Enforcement**: All tests interacting with Chrome must configure `ARGUS_ATTACH=true` to ensure Argus NEVER falls back to `launchChrome()`.
 5. **Zero Data Races**: All code must pass `go test -short -race ./...` with 100% success.

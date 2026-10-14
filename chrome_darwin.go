@@ -33,8 +33,7 @@ func findChromeDarwin() (string, error) {
 			continue
 		}
 		// Verify the actual binary exists inside the .app bundle
-		// Prioritize raw binary "chrome-argus.bin" before "chrome-argus" wrapper script (which hardcodes 9224)
-		for _, name := range []string{"chrome-argus.bin", "chrome-argus", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
+		for _, name := range []string{"Google Chrome", "Google Chrome for Testing", "Chromium"} {
 			if fileExists(filepath.Join(c, "Contents", "MacOS", name)) {
 				return c, nil
 			}
@@ -46,7 +45,6 @@ func findChromeDarwin() (string, error) {
 // chromeDarwinCandidates returns the candidate app bundle paths checked on macOS.
 func chromeDarwinCandidates() []string {
 	return []string{
-		"/Applications/Chrome Argus.app",
 		"/Applications/Google Chrome.app",
 		"/Applications/Google Chrome for Testing.app",
 		"/Applications/Chromium.app",
@@ -69,9 +67,8 @@ func launchChrome() error {
 		return err
 	}
 	// Resolve to the actual binary inside the .app bundle
-	// Prioritize raw binary "chrome-argus.bin" before "chrome-argus" wrapper script (which hardcodes 9224)
 	var binaryPath string
-	for _, name := range []string{"chrome-argus.bin", "chrome-argus", "Google Chrome", "Google Chrome for Testing", "Chromium"} {
+	for _, name := range []string{"Google Chrome", "Google Chrome for Testing", "Chromium"} {
 		p := filepath.Join(appPath, "Contents", "MacOS", name)
 		if fileExists(p) {
 			binaryPath = p
