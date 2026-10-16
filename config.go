@@ -56,7 +56,6 @@ func setConfig(url string, port int, attach *bool) {
 		assertNotPort9224("setConfig", port)
 	}
 	configMu.Lock()
-	defer configMu.Unlock()
 	if url != "" {
 		configuredURL = url
 	}
@@ -66,6 +65,10 @@ func setConfig(url string, port int, attach *bool) {
 	}
 	if attach != nil {
 		configuredAttach = *attach
+	}
+	configMu.Unlock()
+	if url != "" {
+		persistTargetState()
 	}
 }
 

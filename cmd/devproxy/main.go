@@ -18,10 +18,12 @@ import (
 	"flag"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -53,6 +55,28 @@ func loadRoutes() map[string]route {
 		_ = json.Unmarshal(data, &m)
 	}
 	return m
+}
+
+// withRoutes serializes read-modify-write on routes.json with a mkdir lock
+// — concurrent `devproxy register` from two agents must not lose updates.
+func withRoutes(fn func(m map[string]route)) {
+	lock := registryPath() + ".lock"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := os.Mkdir(lock, 0o700); err == nil {
+			break
+		}
+		if info, err := os.Stat(lock); err == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.RemoveAll(lock) // stale lock from a dead process
+			continue
+		}
+		if time.Now().After(deadline) {
+			return // give up rather than corrupt: caller skips the write
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer os.RemoveAll(lock)
+	fn(loadRoutes())
 }
 
 func saveRoutes(m map[string]route) {
@@ -126,16 +150,41 @@ func main() {
 		}
 		abs := absPath(p)
 		r := route{Slug: slugFor(abs), Path: abs, Port: portFor(abs)}
-		m := loadRoutes()
-		m[r.Slug] = r
-		saveRoutes(m)
+		blocked := false
+		withRoutes(func(m map[string]route) {
+			if old, ok := m[r.Slug]; ok && old.Path != r.Path {
+				if _, err := os.Stat(old.Path); err == nil {
+					fmt.Fprintf(os.Stderr, "devproxy: slug %q already routes to %s — pick a distinct directory name\n", r.Slug, old.Path)
+					blocked = true
+					return
+				}
+				fmt.Fprintf(os.Stderr, "devproxy: reclaimed stale slug %q (was %s)\n", r.Slug, old.Path)
+			}
+			for slug, old := range m {
+				if slug != r.Slug && old.Path != r.Path && old.Port == r.Port {
+					fmt.Fprintf(os.Stderr, "devproxy: warning: port %d shared with %s (%s.dev.localhost)\n", r.Port, old.Path, slug)
+				}
+			}
+			m[r.Slug] = r
+			saveRoutes(m)
+		})
+		if blocked {
+			os.Exit(1)
+		}
+		if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", r.Port), 200*time.Millisecond); err == nil {
+			conn.Close()
+			fmt.Fprintf(os.Stderr, "devproxy: warning: 127.0.0.1:%d already listening — traffic will reach that process until your server starts\n", r.Port)
+		}
+		pushBeacon(r)
 		fmt.Printf("%s.%s -> 127.0.0.1:%d  (%s)\n", r.Slug, domain, r.Port, r.Path)
 
 	case "unregister":
 		abs := absPath(firstOr(args, "."))
-		m := loadRoutes()
-		delete(m, slugFor(abs))
-		saveRoutes(m)
+		withRoutes(func(m map[string]route) {
+			delete(m, slugFor(abs))
+			saveRoutes(m)
+		})
+		unpushBeacon(abs)
 
 	case "list":
 		m := loadRoutes()
@@ -159,6 +208,42 @@ func firstOr(s []string, d string) string {
 	return s[0]
 }
 
+// pushBeacon reports the worktree to beacon's resource registry. Best-effort:
+// beacon may be absent — routing must never depend on it.
+func pushBeacon(r route) {
+	beacon, err := exec.LookPath("beacon")
+	if err != nil {
+		return
+	}
+	branch, _ := exec.Command("git", "-C", r.Path, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	common, _ := exec.Command("git", "-C", r.Path, "rev-parse", "--git-common-dir").Output()
+	repo := ""
+	if c := strings.TrimSpace(string(common)); c != "" {
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(r.Path, c) // ".git" in the main checkout
+		}
+		repo = filepath.Base(filepath.Dir(c))
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"path":   r.Path,
+		"port":   r.Port,
+		"slug":   r.Slug,
+		"branch": strings.TrimSpace(string(branch)),
+		"repo":   repo,
+	})
+	args := []string{"register", "worktree", r.Path, "--producer", "devproxy", "--data", string(meta)}
+	if pane := os.Getenv("TMUX_PANE"); pane != "" {
+		args = append(args, "--pane", pane)
+	}
+	_ = exec.Command(beacon, args...).Run()
+}
+
+func unpushBeacon(abs string) {
+	if beacon, err := exec.LookPath("beacon"); err == nil {
+		_ = exec.Command(beacon, "unregister", "worktree", abs).Run()
+	}
+}
+
 func serve() {
 	suffix := "." + domain
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
@@ -174,6 +259,18 @@ func serve() {
 		r, ok := loadRoutes()[slug]
 		if !ok {
 			http.Error(w, fmt.Sprintf("devproxy: no route for slug %q (devproxy register <path>)", slug), http.StatusBadGateway)
+			return
+		}
+		// 活性回收：worktree 目录没了的路由是死路由——摘除并回收 slug，免得永久 502
+		if _, err := os.Stat(r.Path); err != nil {
+			withRoutes(func(m map[string]route) {
+				if cur, ok := m[slug]; ok && cur.Path == r.Path {
+					delete(m, slug)
+					saveRoutes(m)
+				}
+			})
+			unpushBeacon(r.Path)
+			http.Error(w, fmt.Sprintf("devproxy: route %q reaped — worktree %s is gone", slug, r.Path), http.StatusGone)
 			return
 		}
 		target := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", r.Port)}

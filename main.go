@@ -215,7 +215,9 @@ func main() {
 		doShutdown(fmt.Sprintf("signal %s", sig))
 	}()
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "argus", Version: argusVersion}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "argus", Version: argusVersion}, &mcp.ServerOptions{
+		Instructions: "Argus drives the shared agent Chrome via CDP (attach :9224). Workflow: navigate or configure{url} → snapshot{} or a11y_snapshot{} → then click/fill/hover by the ref from the snapshot. Do NOT probe the DOM with eval+querySelector — snapshot returns stable refs for every interactive element. Use wait_for for async content, batch_actions for click→fill→wait sequences, diagnose for broken pages (console+network in one shot). eval is a last resort for JS-level state only. Tabs are background by default and never disturb the user.",
+	})
 	server.AddReceivingMiddleware(toolSuggestMiddleware)
 	registerAllTools(server)
 
@@ -292,6 +294,7 @@ func registerAllTools(server *mcp.Server) {
 	registerSessionTools(server)
 	registerInterceptTools(server)
 	registerTraceTools(server)
+	registerOcclusionTools(server)
 }
 
 // runDoctor runs diagnostic checks and exits.

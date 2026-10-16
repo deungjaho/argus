@@ -32,8 +32,9 @@ func getCurrentTargetID() string {
 
 func setCurrentTargetID(id string) {
 	targetSessionMu.Lock()
-	defer targetSessionMu.Unlock()
 	currentTargetID = id
+	targetSessionMu.Unlock()
+	persistTargetState()
 }
 
 func clearCurrentTargetID() {
@@ -165,6 +166,29 @@ func resolveTarget(explicitID ...string) (*browserTarget, error) {
 
 	// 2. Fall back to URL-based lookup (backward compat)
 	if url == "" {
+		// 进程重启后内存态归零：按 owner pane 从持久化状态恢复上次目标，
+		// 否则 agent 每次 argus 重启都要重跑 configure。
+		if st, ok := loadTargetState(); ok {
+			if st.TargetID != "" {
+				if target := findTargetByID(targets, st.TargetID); target != nil {
+					setCurrentTargetID(target.ID)
+					if target.URL != "" {
+						rec.SetCurrentURL(target.ID, target.URL)
+					}
+					return target, nil
+				}
+			}
+			if st.URL != "" {
+				setConfig(st.URL, 0, nil)
+				if target := findTargetByURL(targets, st.URL); target != nil {
+					setCurrentTargetID(target.ID)
+					if target.URL != "" {
+						rec.SetCurrentURL(target.ID, target.URL)
+					}
+					return target, nil
+				}
+			}
+		}
 		return nil, fmt.Errorf("no target selected and no URL configured; call configure first with {\"url\": \"http://localhost:PORT\"}")
 	}
 	if target := findTargetByURL(targets, url); target != nil {

@@ -235,6 +235,9 @@ var autostartBrowserOnce sync.Once
 
 // tryAutostartBrowser launches Chrome when the attach endpoint is dead,
 // then polls the CDP target list until it responds or ~8s elapse.
+// Chrome's startup window is minimized right away — headed Chrome always
+// materializes one on launch, and "agent works in background" means it
+// must never land on the user's screen.
 func tryAutostartBrowser() {
 	autostartBrowserOnce.Do(func() {
 		logInfo("attach target unreachable on :%d — attempting to launch Chrome", cdpPort)
@@ -246,12 +249,53 @@ func tryAutostartBrowser() {
 		for time.Now().Before(deadline) {
 			if _, err := listCDPTargets(); err == nil {
 				logInfo("autostart: CDP endpoint up on :%d", cdpPort)
+				minimizeAllWindows()
 				return
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
 		logWarn("autostart: CDP endpoint still unreachable after 8s")
 	})
+}
+
+// minimizeAllWindows minimizes every window hosting a page target.
+// Best-effort: CDP failures leave windows as-is.
+func minimizeAllWindows() {
+	targets, err := listCDPTargets()
+	if err != nil {
+		return
+	}
+	seen := map[int]bool{}
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue
+		}
+		winID, err := cdpWindowForTarget(t.ID)
+		if err != nil || seen[winID] {
+			continue
+		}
+		seen[winID] = true
+		_ = cdpSetWindowState(winID, "minimized")
+	}
+}
+
+// windowCount returns how many distinct windows host page targets —
+// 0 means Chrome is running with no windows (next createTarget makes one).
+func windowCount() int {
+	targets, err := listCDPTargets()
+	if err != nil {
+		return -1 // unknown — don't act on a guess
+	}
+	wins := map[int]bool{}
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue
+		}
+		if id, err := cdpWindowForTarget(t.ID); err == nil {
+			wins[id] = true
+		}
+	}
+	return len(wins)
 }
 
 func cdpTargetForURL(targetURL string) (*browserTarget, error) {
@@ -328,6 +372,9 @@ func exceptionText(details *browserRuntimeExceptionDetails) string {
 // --- CDP target management ---
 
 func cdpCreateTarget(browserWSURL, targetURL string, background bool) (string, error) {
+	// Chrome 活着但零窗口时，createTarget 会新造一个窗口弹到用户屏幕上——
+	// 记录前置窗口数，若是我们的动作造出的窗口且不要前台，立即最小化。
+	hadWindows := windowCount() != 0 // -1（查询失败）按"有窗口"处理，宁不动不错最小化用户窗口
 	var result struct {
 		TargetID string `json:"targetId"`
 	}
@@ -338,6 +385,11 @@ func cdpCreateTarget(browserWSURL, targetURL string, background bool) (string, e
 		return "", err
 	}
 	tabID := strings.TrimSpace(result.TargetID)
+	if !hadWindows && !wantFocus() {
+		if winID, err := cdpWindowForTarget(tabID); err == nil && winID != 0 {
+			_ = cdpSetWindowState(winID, "minimized")
+		}
+	}
 	beaconRegisterTab(tabID, targetURL)
 	return tabID, nil
 }
