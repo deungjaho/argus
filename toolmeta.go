@@ -28,6 +28,7 @@ var toolMetaRegistry = []ToolMeta{
 	{Name: "screenshot", Capability: CapDefault, SideEffects: []string{"writes_temp_file"}, Sensitivity: "low", Idempotent: true, Description: "Capture viewport, element, or full-page screenshot."},
 	{Name: "get_element", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Get detailed info about an element by selector, coordinates, or query."},
 	{Name: "query", Capability: CapDefault, Sensitivity: "low", Idempotent: true, Description: "Structured DOM query: per-element text/box/classes/attrs with reusable refs; '>>>' pierces shadow DOM."},
+	{Name: "occlusion", Capability: CapDefault, SideEffects: []string{"scrolls_viewport"}, Sensitivity: "low", Idempotent: true, Description: "Check whether an element is actually visible/clickable or covered by overlays; scan mode audits all interactive elements."},
 	{Name: "get_picked", Capability: CapCore, Sensitivity: "low", Idempotent: true, Description: "Return latest user-picked element locator (picker capture) with fallbacks."},
 	{Name: "record", Capability: CapCore, SideEffects: []string{"records_user_input"}, Sensitivity: "medium", Idempotent: false, Description: "Capture real user input as replayable action trace (start/stop/status)."},
 	{Name: "session", Capability: CapCore, SideEffects: []string{"creates_window"}, Sensitivity: "medium", Idempotent: false, Description: "Manage browsing sessions (start/stop/list/reveal/hide), incl. login-state fork."},

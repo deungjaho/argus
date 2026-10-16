@@ -294,6 +294,7 @@ func registerAllTools(server *mcp.Server) {
 	registerSessionTools(server)
 	registerInterceptTools(server)
 	registerTraceTools(server)
+	registerOcclusionTools(server)
 }
 
 // runDoctor runs diagnostic checks and exits.
