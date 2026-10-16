@@ -21,10 +21,13 @@ type occlusionInput struct {
 	XPath    string `json:"xpath,omitempty"`
 	Scan     bool   `json:"scan,omitempty"`
 	Within   string `json:"within,omitempty"`
-	NoScroll bool   `json:"no_scroll,omitempty"`
-	Sample   int    `json:"sample,omitempty"`
-	TargetID string `json:"target_id,omitempty"`
-	TabID    string `json:"tab_id,omitempty"`
+	// Candidates 补 scan 模式的候选选择器——框架渲染的可交互节点（Vue
+	// addEventListener 的 div 等）不在默认 a/button/input 集合里。
+	Candidates string `json:"candidates,omitempty"`
+	NoScroll   bool   `json:"no_scroll,omitempty"`
+	Sample     int    `json:"sample,omitempty"`
+	TargetID   string `json:"target_id,omitempty"`
+	TabID      string `json:"tab_id,omitempty"`
 }
 
 func registerOcclusionTools(server *mcp.Server) {
@@ -111,9 +114,20 @@ func occlusionExpression(input occlusionInput, sample int) string {
 %s
 %s
 const within = %s;
+const extra = %s;
 const scope = within ? argusResolve(within) : document;
 if (!scope) return {error: 'within selector matched nothing', within};
-const cand = scope.querySelectorAll('a,button,input,select,textarea,[role="button"],[role="link"],[onclick],[data-ref]');
+const baseSel = 'a,button,input,select,textarea,[role="button"],[role="link"],[onclick],[data-ref],[contenteditable="true"]';
+const cand = new Set(scope.querySelectorAll(extra ? baseSel + ',' + extra : baseSel));
+// 启发式补集：computed cursor:pointer 的容器（框架 addEventListener 的
+// 可点击 div/组件），限制 4000 个扫描上限防卡死。
+let checked = 0;
+for (const el of scope.querySelectorAll('*')) {
+  if (checked++ > 4000) break;
+  if (cand.has(el)) continue;
+  if (el.children.length > 6) continue;
+  if (getComputedStyle(el).cursor === 'pointer') cand.add(el);
+}
 const out = [];
 const seen = new Set();
 for (const el of cand) {
@@ -129,13 +143,15 @@ for (const el of cand) {
     if (seen.has(el)) break;
     seen.add(el);
     const info = occInfo(s);
-    out.push({element: selectorFor(el) || el.localName, text: (el.innerText || '').trim().slice(0, 40), by: info, at: {x: Math.round(x), y: Math.round(y)}});
+    // dialog/drawer/overlay 盖住内容通常是设计意图（弹窗本来就该压页面）；
+    // in-flow/fixed/absolute 盖住可交互元素才可疑。
+    out.push({element: selectorFor(el) || el.localName, text: (el.innerText || '').trim().slice(0, 40), by: info, suspicious: (info.kind === 'in-flow' || info.kind === 'fixed' || info.kind === 'absolute'), at: {x: Math.round(x), y: Math.round(y)}});
     break;
   }
   if (out.length >= 50) break;
 }
-return {scanned: cand.length, occluded: out};
-})()`, argusQueryJS, selectorForJS, occlusionInfoJS, jsString(within))
+return {scanned: cand.size, occluded: out};
+})()`, argusQueryJS, selectorForJS, occlusionInfoJS, jsString(within), jsString(input.Candidates))
 	}
 
 	sel := resolveSelector(input.Ref, input.Selector, input.CSS, input.Target, input.XPath, "")
