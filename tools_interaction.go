@@ -136,7 +136,7 @@ type dragInput struct {
 }
 
 type batchActionStep struct {
-	Action         string   `json:"action"` // click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract
+	Action         string   `json:"action"` // click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract, eval
 	Target         string   `json:"target,omitempty"`
 	Ref            string   `json:"ref,omitempty"`
 	Selector       string   `json:"selector,omitempty"`
@@ -160,9 +160,11 @@ type batchActionStep struct {
 	WaitTransition bool     `json:"wait_transition,omitempty"`
 	URL            string   `json:"url,omitempty"`
 	Href           string   `json:"href,omitempty"`
-	Name           string   `json:"name,omitempty"`     // extract: variable name for {{name}} substitution in later steps
-	Attr           string   `json:"attr,omitempty"`     // extract: text (default) | value | html | attr:<name>
-	Optional       bool     `json:"optional,omitempty"` // on failure: record error but continue the batch
+	Name           string   `json:"name,omitempty"`       // extract/eval: variable name for {{name}} substitution in later steps
+	Attr           string   `json:"attr,omitempty"`       // extract: text (default) | value | html | attr:<name>
+	Expression     string   `json:"expression,omitempty"` // eval: JS expression, result lands in step result
+	Script         string   `json:"script,omitempty"`     // eval: alias for expression
+	Optional       bool     `json:"optional,omitempty"`   // on failure: record error but continue the batch
 }
 
 type batchActionsInput struct {
@@ -613,7 +615,7 @@ func registerInteractionTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "batch_actions",
-		Description: "Execute a sequence of UI interactions (click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract) in a single turn. Replays until the first error (unless optional: true). Reduces multi-turn latency.",
+		Description: "Execute a sequence of UI interactions (click, fill, type, key, press, wait_for, hover, scroll, navigate, assert, extract, eval) in a single turn. eval steps take expression/script and return the JS result. Replays until the first error (unless optional: true). Reduces multi-turn latency.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input batchActionsInput) (*mcp.CallToolResult, any, error) {
 		rec := BeginAction("batch_actions")
 		defer rec.End()
@@ -861,6 +863,24 @@ func registerInteractionTools(server *mcp.Server) {
 				s, _ := v.(string)
 				vars[name] = s
 				stepRes["extracted"] = map[string]any{"name": name, "value": s}
+
+			case "eval":
+				// JS probe inside a sequence — keeps read-state steps in the
+				// same turn instead of a separate eval tool call.
+				expr := strings.TrimSpace(resolveFirstNonEmpty(step.Expression, step.Script))
+				if expr == "" {
+					return fmt.Errorf("eval requires expression")
+				}
+				v, err := cdpEvaluate(ws, expandVars(expr), true)
+				if err != nil {
+					return err
+				}
+				stepRes["value"] = v
+				if name := strings.TrimSpace(step.Name); name != "" {
+					if s, ok := v.(string); ok {
+						vars[name] = s
+					}
+				}
 
 			default:
 				return fmt.Errorf("unsupported action type: %s", actionType)
